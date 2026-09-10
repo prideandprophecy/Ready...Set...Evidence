@@ -1,18 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Check, Edit3, Flag, Plus, Vote } from 'lucide-react';
+import { Check, Edit3, Flag, Plus, Trash2, Vote } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { cleanJatsText, formatDate, slugify } from '../lib/identifiers';
 import { appraisalComplete, calculateDomainMean, frameworkDomains, makeInitialResponses, scoreLabel, setDomainResponse } from '../lib/appraisal';
+import FacetPicker, { facetSummary, facetTypeLabel } from '../components/FacetPicker';
 
 const num = v => v === '' || v == null ? null : Number(v);
 const emptyEvidence = { cohort_id: '', outcome_label: '', outcome_type: 'proportion', timepoint_label: '', subgroup_label: '', units: '', mean: '', sd: '', n: '', events: '', total_exposure: '', reported_value: '', source_locator: '', extraction_notes: '' };
+const emptyCohort = { label: 'Overall cohort', description: '', cohort_type: 'overall', parent_cohort_id: '', sample_size: '', visibility: 'public', owner_org_id: '' };
 
 function ScopeBadge({ visibility, orgName }) {
   if (visibility === 'organization') return <span className="tag private-tag">Organization: {orgName || 'members'}</span>;
   if (visibility === 'private') return <span className="tag private-tag">Private</span>;
   return <span className="tag public-tag">Public</span>;
+}
+
+function GroupTypeBadge({ type }) {
+  const label = type === 'arm' ? 'Study arm' : type === 'subgroup' ? 'Subgroup' : 'Overall cohort';
+  return <span className="tag">{label}</span>;
 }
 
 export default function WorkPage() {
@@ -21,6 +28,8 @@ export default function WorkPage() {
   const [work, setWork] = useState(null);
   const [authors, setAuthors] = useState([]);
   const [cohorts, setCohorts] = useState([]);
+  const [cohortFacets, setCohortFacets] = useState({});
+  const [comparisons, setComparisons] = useState([]);
   const [concepts, setConcepts] = useState([]);
   const [slots, setSlots] = useState([]);
   const [extractions, setExtractions] = useState([]);
@@ -36,7 +45,8 @@ export default function WorkPage() {
   const [workForm, setWorkForm] = useState({});
   const [msg, setMsg] = useState('');
 
-  const [cohortForm, setCohortForm] = useState({ label: 'Overall cohort', patient_population: '', intervention: '', comparator: '', sample_size: '', visibility: 'public', owner_org_id: '' });
+  const [cohortForm, setCohortForm] = useState(emptyCohort);
+  const [compareForm, setCompareForm] = useState({ label: '', group_a_cohort_id: '', group_b_cohort_id: '' });
   const [ev, setEv] = useState(emptyEvidence);
   const [app, setApp] = useState({ framework_id: '', responses: { domains: {} }, rationale: '', visibility: 'public', owner_org_id: '' });
 
@@ -44,23 +54,12 @@ export default function WorkPage() {
 
   async function load() {
     setMsg('');
-    const { data: slotIdsData } = await supabase.from('rse_evidence_slots').select('id').eq('work_id', id);
-    const slotIds = (slotIdsData || []).map(x => x.id);
-    const extractionQuery = slotIds.length
-      ? supabase.from('rse_extractions').select('*,creator:rse_profiles!created_by(username,display_name)').in('slot_id', slotIds).order('created_at')
-      : Promise.resolve({ data: [] });
-    const voteQuery = slotIds.length
-      ? supabase.from('rse_extraction_votes').select('*').in('slot_id', slotIds)
-      : Promise.resolve({ data: [] });
-
-    const [w, a, c, o, s, e, v, ap, f, myOrgs, versions, claim, editPermission] = await Promise.all([
+    const [w, a, c, o, s, ap, f, myOrgs, versions, claim, editPermission] = await Promise.all([
       supabase.from('rse_works').select('*').eq('id', id).single(),
       supabase.from('rse_work_authors').select('*,linked_profile:rse_profiles!linked_profile_id(username,display_name)').eq('work_id', id).order('author_order'),
       supabase.from('rse_cohorts').select('*').eq('work_id', id).order('created_at'),
       supabase.from('rse_outcome_concepts').select('*').order('label'),
       supabase.from('rse_evidence_slots').select('*').eq('work_id', id).order('created_at'),
-      extractionQuery,
-      voteQuery,
       supabase.from('rse_appraisals').select('*,profile:rse_profiles!user_id(username,display_name),framework:rse_appraisal_frameworks(name,slug,response_schema)').eq('work_id', id).order('created_at'),
       supabase.from('rse_appraisal_frameworks').select('*').eq('is_public', true).order('name'),
       user ? supabase.from('rse_org_members').select('role,status,org:rse_organizations(id,name,slug)').eq('user_id', user.id).eq('status', 'active') : Promise.resolve({ data: [] }),
@@ -69,14 +68,33 @@ export default function WorkPage() {
       user ? supabase.rpc('rse_can_edit_work', { p_work_id: id, p_user_id: user.id }) : Promise.resolve({ data: false }),
     ]);
 
+    const cohortIds = (c.data || []).map(x => x.id);
+    const slotIds = (s.data || []).map(x => x.id);
+
+    const [facetLinks, comps, e, v] = await Promise.all([
+      cohortIds.length ? supabase.from('rse_cohort_concepts').select('cohort_id,concept:rse_concepts(id,canonical_label,concept_type,visibility,owner_org_id,parent_concept_id)').in('cohort_id', cohortIds) : Promise.resolve({ data: [] }),
+      supabase.from('rse_comparisons').select('*').eq('work_id', id).order('created_at'),
+      slotIds.length ? supabase.from('rse_extractions').select('*,creator:rse_profiles!created_by(username,display_name)').in('slot_id', slotIds).order('created_at') : Promise.resolve({ data: [] }),
+      slotIds.length ? supabase.from('rse_extraction_votes').select('*').in('slot_id', slotIds) : Promise.resolve({ data: [] }),
+    ]);
+
     const extractionIds = (e.data || []).map(x => x.id);
     const ch = extractionIds.length
       ? await supabase.from('rse_challenges').select('*').in('extraction_id', extractionIds).order('created_at', { ascending: false })
       : { data: [] };
 
+    const facetMap = {};
+    for (const link of facetLinks.data || []) {
+      if (!facetMap[link.cohort_id]) facetMap[link.cohort_id] = [];
+      if (link.concept) facetMap[link.cohort_id].push(link.concept);
+    }
+    Object.values(facetMap).forEach(items => items.sort((x, y) => `${x.concept_type}:${x.canonical_label}`.localeCompare(`${y.concept_type}:${y.canonical_label}`)));
+
     setWork(w.data || null);
     setAuthors(a.data || []);
     setCohorts(c.data || []);
+    setCohortFacets(facetMap);
+    setComparisons(comps.data || []);
     setConcepts(o.data || []);
     setSlots(s.data || []);
     setExtractions(e.data || []);
@@ -101,7 +119,11 @@ export default function WorkPage() {
       });
     }
     if (!ev.cohort_id && c.data?.[0]) setEv(x => ({ ...x, cohort_id: c.data[0].id }));
-    if (!app.framework_id && f.data?.length) { const preferred=(f.data||[]).find(x=>x.slug==='rse-custom')||f.data[0]; chooseFramework(preferred.id, f.data, ap.data || [], w.data?.publication_year); }
+    if (!compareForm.group_a_cohort_id && c.data?.length >= 2) setCompareForm(x => ({ ...x, group_a_cohort_id: c.data[0].id, group_b_cohort_id: c.data[1].id }));
+    if (!app.framework_id && f.data?.length) {
+      const preferred = (f.data || []).find(x => x.slug === 'rse-custom') || f.data[0];
+      chooseFramework(preferred.id, f.data, ap.data || [], w.data?.publication_year);
+    }
   }
 
   const conceptMap = useMemo(() => new Map(concepts.map(x => [x.id, x])), [concepts]);
@@ -112,6 +134,11 @@ export default function WorkPage() {
   const appraisalScore = calculateDomainMean(app.responses);
   const voteCount = extractionId => votes.filter(v => v.extraction_id === extractionId).length;
   const myVote = slotId => votes.find(v => v.slot_id === slotId && v.user_id === user?.id)?.extraction_id;
+
+  function canEditGroup(cohort) {
+    if (!user || !cohort) return false;
+    return canEditWork || cohort.created_by === user.id || (cohort.visibility === 'organization' && orgs.some(o => o.id === cohort.owner_org_id));
+  }
 
   function chooseFramework(frameworkId, frameworkRows = frameworks, existingRows = appraisals, publicationYear = work?.publication_year) {
     const framework = frameworkRows.find(f => f.id === frameworkId);
@@ -155,21 +182,62 @@ export default function WorkPage() {
     if (!user) return;
     if (cohortForm.visibility === 'organization' && !cohortForm.owner_org_id) { setMsg('Choose an organization for organization-only evidence.'); return; }
     const payload = {
-      ...cohortForm,
+      label: cohortForm.label.trim(),
+      description: cohortForm.description || null,
+      cohort_type: cohortForm.cohort_type,
+      parent_cohort_id: cohortForm.parent_cohort_id || null,
       sample_size: num(cohortForm.sample_size),
+      visibility: cohortForm.visibility,
       owner_org_id: cohortForm.visibility === 'organization' ? cohortForm.owner_org_id : null,
       work_id: id,
       created_by: user.id,
     };
-    const { error } = await supabase.from('rse_cohorts').insert(payload);
-    setMsg(error ? error.message : 'Cohort added. Evidence extracted into this cohort inherits its access scope.');
+    const { data, error } = await supabase.from('rse_cohorts').insert(payload).select().single();
+    setMsg(error ? error.message : 'Study group added. Add structured facets below to describe population, intervention, products, characteristics, setting, or other relevant attributes.');
     if (!error) {
-      setCohortForm({ label: '', patient_population: '', intervention: '', comparator: '', sample_size: '', visibility: 'public', owner_org_id: '' });
+      setCohortForm({ ...emptyCohort, label: '' });
+      setEv(x => ({ ...x, cohort_id: x.cohort_id || data.id }));
       await load();
     }
   }
 
-  async function findOrCreateConcept(label, type) {
+  async function addFacet(cohort, concept) {
+    if (!user || !canEditGroup(cohort)) return;
+    const { error } = await supabase.from('rse_cohort_concepts').upsert({ cohort_id: cohort.id, concept_id: concept.id, created_by: user.id }, { onConflict: 'cohort_id,concept_id' });
+    setMsg(error ? error.message : `${concept.canonical_label} added to ${cohort.label}.`);
+    if (!error) await load();
+  }
+
+  async function removeFacet(cohort, concept) {
+    if (!user || !canEditGroup(cohort)) return;
+    const { error } = await supabase.from('rse_cohort_concepts').delete().eq('cohort_id', cohort.id).eq('concept_id', concept.id);
+    setMsg(error ? error.message : `${concept.canonical_label} removed from ${cohort.label}.`);
+    if (!error) await load();
+  }
+
+  async function addComparison(e) {
+    e.preventDefault();
+    if (!user || !canEditWork) return;
+    if (!compareForm.group_a_cohort_id || !compareForm.group_b_cohort_id || compareForm.group_a_cohort_id === compareForm.group_b_cohort_id) {
+      setMsg('Choose two different study groups.');
+      return;
+    }
+    const a = cohortMap.get(compareForm.group_a_cohort_id);
+    const b = cohortMap.get(compareForm.group_b_cohort_id);
+    const label = compareForm.label.trim() || `${a?.label || 'Group A'} vs ${b?.label || 'Group B'}`;
+    const { error } = await supabase.from('rse_comparisons').insert({ work_id: id, label, group_a_cohort_id: compareForm.group_a_cohort_id, group_b_cohort_id: compareForm.group_b_cohort_id, created_by: user.id });
+    setMsg(error ? error.message : 'Within-study comparison recorded.');
+    if (!error) { setCompareForm({ label: '', group_a_cohort_id: '', group_b_cohort_id: '' }); await load(); }
+  }
+
+  async function deleteComparison(comparisonId) {
+    if (!canEditWork) return;
+    const { error } = await supabase.from('rse_comparisons').delete().eq('id', comparisonId);
+    setMsg(error ? error.message : 'Comparison removed.');
+    if (!error) await load();
+  }
+
+  async function findOrCreateOutcomeConcept(label, type) {
     const existing = concepts.find(x => x.label.toLowerCase() === label.toLowerCase());
     if (existing) return existing;
     const { data, error } = await supabase.from('rse_outcome_concepts').insert({ label, slug: `${slugify(label)}-${Math.random().toString(36).slice(2, 6)}`, default_outcome_type: type, created_by: user.id }).select().single();
@@ -183,8 +251,8 @@ export default function WorkPage() {
     setMsg('');
     try {
       const cohort = cohorts.find(c => c.id === ev.cohort_id);
-      if (!cohort) throw new Error('Choose a cohort first.');
-      const concept = await findOrCreateConcept(ev.outcome_label.trim(), ev.outcome_type);
+      if (!cohort) throw new Error('Choose a study group first.');
+      const concept = await findOrCreateOutcomeConcept(ev.outcome_label.trim(), ev.outcome_type);
       let { data: slot } = await supabase.from('rse_evidence_slots').select('*')
         .eq('work_id', id).eq('cohort_id', ev.cohort_id).eq('outcome_concept_id', concept.id).eq('outcome_type', ev.outcome_type)
         .ilike('timepoint_label', ev.timepoint_label || '').ilike('subgroup_label', ev.subgroup_label || '').maybeSingle();
@@ -195,7 +263,7 @@ export default function WorkPage() {
           outcome_concept_id: concept.id,
           outcome_type: ev.outcome_type,
           timepoint_label: ev.timepoint_label || '',
-          subgroup_label: ev.subgroup_label || '',
+          subgroup_label: '',
           units: ev.units || null,
           created_by: user.id,
         }).select().single();
@@ -300,7 +368,7 @@ export default function WorkPage() {
     {msg && <div className="notice">{msg}</div>}
 
     {editingWork && canEditWork && <form className="card form-grid" onSubmit={saveWorkMetadata}>
-      <div className="span2"><h2>Edit paper metadata</h2><p className="muted tiny">The original contributor retains edit access. ORCID-verified authors also receive edit access. Every saved metadata revision is versioned rather than overwriting the audit history.</p></div>
+      <div className="span2"><h2>Edit paper metadata</h2><p className="muted tiny">The original contributor retains edit access. ORCID-verified authors also receive edit access. Every saved metadata revision is versioned.</p></div>
       <label className="span2">Title<input required value={workForm.title || ''} onChange={e => setWorkForm({ ...workForm, title: e.target.value })} /></label>
       <label>Journal<input value={workForm.journal || ''} onChange={e => setWorkForm({ ...workForm, journal: e.target.value })} /></label>
       <label>Publication year<input value={workForm.publication_year || ''} onChange={e => setWorkForm({ ...workForm, publication_year: e.target.value })} inputMode="numeric" /></label>
@@ -313,13 +381,47 @@ export default function WorkPage() {
 
     {work.abstract && <div className="card"><h2>Abstract</h2><p className="prewrap">{cleanJatsText(work.abstract)}</p></div>}
 
+    <div className="card">
+      <div className="section-heading"><div><div className="eyebrow">Study structure</div><h2>Cohorts, arms, and subgroups</h2></div></div>
+      <p className="muted">Groups carry reusable structured facets. The facet system is domain-neutral: a group can be tagged with populations, conditions, interventions, devices, drugs/biologics, procedures, tests, exposures, settings, geography, characteristics/variants, or other concepts.</p>
+      <div className="stack">
+        {cohorts.map(c => {
+          const parent = cohortMap.get(c.parent_cohort_id);
+          const facets = cohortFacets[c.id] || [];
+          return <div className="card" key={c.id} style={{ margin: 0 }}>
+            <div className="slot-head"><div><h3>{c.label}</h3><div className="tag-row"><GroupTypeBadge type={c.cohort_type} /><ScopeBadge visibility={c.visibility || 'public'} orgName={orgMap.get(c.owner_org_id)?.name} /></div></div>{c.sample_size != null && <span className="tag">n={c.sample_size}</span>}</div>
+            {parent && <div className="muted tiny">Parent group: {parent.label}</div>}
+            {c.description && <p>{c.description}</p>}
+            {(c.patient_population || c.intervention || c.indication || c.comparator) && <div className="subtle-callout"><strong>Legacy cohort fields:</strong> {[c.patient_population, c.intervention, c.indication, c.comparator].filter(Boolean).join(' • ')}. These remain preserved but new synthesis uses structured facets.</div>}
+            {facets.length > 0 && <div className="tag-row">{facets.map(f => <span className="tag" key={f.id}><span className="muted tiny">{facetTypeLabel(f.concept_type)}:</span>&nbsp;{f.canonical_label}</span>)}</div>}
+            {canEditGroup(c) && <FacetPicker
+              selected={facets}
+              onAdd={concept => addFacet(c, concept)}
+              onRemove={concept => removeFacet(c, concept)}
+              allowCreate
+              conceptVisibility={c.visibility || 'public'}
+              ownerOrgId={c.owner_org_id || null}
+              searchOrgId={c.visibility === 'organization' ? c.owner_org_id : null}
+              includePrivate={c.visibility === 'private'}
+              label="Add or remove structured facets"
+              help="Examples can be as broad or granular as the evidence requires. Characteristics/variants are generic, not device-specific fields."
+            />}
+          </div>;
+        })}
+        {!cohorts.length && <div className="empty-state">No study groups yet.</div>}
+      </div>
+    </div>
+
+    {comparisons.length > 0 && <div className="card"><h2>Within-study comparisons</h2><p className="muted tiny">These records describe which study groups were directly compared. They do not by themselves manufacture a comparative effect estimate.</p>{comparisons.map(c => <div className="duplicate-row" key={c.id}><div><strong>{c.label}</strong><div className="muted tiny">{cohortMap.get(c.group_a_cohort_id)?.label} vs {cohortMap.get(c.group_b_cohort_id)?.label}</div></div>{canEditWork && <button className="button mini ghost" onClick={() => deleteComparison(c.id)}><Trash2 size={13} /> Remove</button>}</div>)}</div>}
+
     <div className="two-column"><section>
       <div className="card"><h2>Authors</h2>{authors.map(a => <div key={a.id}>{a.linked_profile?.username ? <Link to={`/u/${a.linked_profile.username}`}>{a.full_name}</Link> : a.full_name} {a.orcid && <span className="muted tiny">ORCID {a.orcid}</span>}</div>)}{!authors.length && <div className="muted">No author metadata.</div>}</div>
       <div className="section-heading"><div><div className="eyebrow">Structured evidence</div><h2>Evidence slots and competing extractions</h2></div></div>
       {slots.map(s => {
         const cohort = cohortMap.get(s.cohort_id);
+        const facets = cohortFacets[s.cohort_id] || [];
         return <div className="card evidence-slot" key={s.id}>
-          <div className="slot-head"><div><h3>{conceptMap.get(s.outcome_concept_id)?.label || 'Outcome'}</h3><div className="muted">{cohort?.label} {s.timepoint_label && `• ${s.timepoint_label}`} {s.subgroup_label && `• ${s.subgroup_label}`} • {s.outcome_type}</div><div className="tag-row"><ScopeBadge visibility={cohort?.visibility || 'public'} orgName={orgMap.get(cohort?.owner_org_id)?.name} /></div></div><span className="tag">{extractions.filter(x => x.slot_id === s.id).length} proposal(s)</span></div>
+          <div className="slot-head"><div><h3>{conceptMap.get(s.outcome_concept_id)?.label || 'Outcome'}</h3><div className="muted">{cohort?.label} {s.timepoint_label && `• ${s.timepoint_label}`} {s.subgroup_label && `• legacy subgroup: ${s.subgroup_label}`} • {s.outcome_type}</div>{facets.length > 0 && <div className="muted tiny">{facetSummary(facets)}</div>}<div className="tag-row"><ScopeBadge visibility={cohort?.visibility || 'public'} orgName={orgMap.get(cohort?.owner_org_id)?.name} /></div></div><span className="tag">{extractions.filter(x => x.slot_id === s.id).length} proposal(s)</span></div>
           {extractions.filter(x => x.slot_id === s.id).map(x => <div className={`extraction-row ${myVote(s.id) === x.id ? 'selected' : ''}`} key={x.id}><div><strong>{s.outcome_type === 'continuous' ? `mean ${x.mean} (SD ${x.sd}), n=${x.n}` : s.outcome_type === 'rate' ? `${x.events} events / ${x.total_exposure} exposure` : `${x.events}/${x.n}`}</strong><div className="muted tiny">Source: {x.source_locator || 'not specified'} • Extracted by {x.creator?.display_name || x.creator?.username || 'contributor'} • {voteCount(x.id)} confirmations</div>{x.extraction_notes && <div className="tiny">{x.extraction_notes}</div>}</div><div className="row-actions">{user && <button className="button mini" onClick={() => vote(s.id, x.id)}><Vote size={14} /> {myVote(s.id) === x.id ? 'Confirmed' : 'Confirm'}</button>}{user && <button className="button mini ghost" onClick={() => challenge(x.id)}><Flag size={14} /> Challenge</button>}{user?.id === x.created_by && <button className="button mini ghost" onClick={() => editExtraction(x)}>Edit</button>}</div></div>)}
         </div>;
       })}
@@ -328,24 +430,32 @@ export default function WorkPage() {
 
     <aside>
       {user && <>
-        <form className="card form-stack" onSubmit={addCohort}><h2><Plus size={17} /> Add cohort</h2>
+        <form className="card form-stack" onSubmit={addCohort}><h2><Plus size={17} /> Add study group</h2>
+          <p className="muted tiny">Create the analytical group first, then attach reusable facets to it. A subgroup can optionally point to its parent group.</p>
           <label>Evidence access<select value={cohortForm.visibility} onChange={e => setCohortForm({ ...cohortForm, visibility: e.target.value, owner_org_id: e.target.value === 'organization' ? cohortForm.owner_org_id : '' })}><option value="public">Public Commons</option><option value="private">Private to me</option><option value="organization">Organization only</option></select></label>
           {cohortForm.visibility === 'organization' && <label>Organization<select required value={cohortForm.owner_org_id} onChange={e => setCohortForm({ ...cohortForm, owner_org_id: e.target.value })}><option value="">Select</option>{orgs.map(o => <option value={o.id} key={o.id}>{o.name}</option>)}</select></label>}
-          <label>Label<input required value={cohortForm.label} onChange={e => setCohortForm({ ...cohortForm, label: e.target.value })} /></label>
-          <label>Patient population<input value={cohortForm.patient_population} onChange={e => setCohortForm({ ...cohortForm, patient_population: e.target.value })} /></label>
-          <label>Intervention/device/drug<input value={cohortForm.intervention} onChange={e => setCohortForm({ ...cohortForm, intervention: e.target.value })} /></label>
-          <label>Comparator<input value={cohortForm.comparator} onChange={e => setCohortForm({ ...cohortForm, comparator: e.target.value })} /></label>
+          <label>Group type<select value={cohortForm.cohort_type} onChange={e => setCohortForm({ ...cohortForm, cohort_type: e.target.value, parent_cohort_id: e.target.value === 'overall' ? '' : cohortForm.parent_cohort_id })}><option value="overall">Overall cohort</option><option value="arm">Study arm</option><option value="subgroup">Subgroup</option></select></label>
+          {cohortForm.cohort_type !== 'overall' && <label>Parent group, optional<select value={cohortForm.parent_cohort_id} onChange={e => setCohortForm({ ...cohortForm, parent_cohort_id: e.target.value })}><option value="">None</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label}</option>)}</select></label>}
+          <label>Label<input required value={cohortForm.label} onChange={e => setCohortForm({ ...cohortForm, label: e.target.value })} placeholder="e.g., Treatment arm A, Pediatric subgroup" /></label>
+          <label>Description / population notes<textarea rows="3" value={cohortForm.description} onChange={e => setCohortForm({ ...cohortForm, description: e.target.value })} placeholder="Narrative details that do not need to be synthesis filters" /></label>
           <label>Sample size<input value={cohortForm.sample_size} onChange={e => setCohortForm({ ...cohortForm, sample_size: e.target.value })} /></label>
-          <button className="button secondary">Add cohort</button>
+          <button className="button secondary">Add study group</button>
         </form>
 
+        {canEditWork && cohorts.length >= 2 && <form className="card form-stack" onSubmit={addComparison}><h2>Define direct comparison</h2>
+          <p className="muted tiny">Use this when the study directly compares two arms/groups. Comparator is a relationship between groups rather than a free-text cohort property.</p>
+          <label>Group A<select required value={compareForm.group_a_cohort_id} onChange={e => setCompareForm({ ...compareForm, group_a_cohort_id: e.target.value })}><option value="">Select</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label}</option>)}</select></label>
+          <label>Group B<select required value={compareForm.group_b_cohort_id} onChange={e => setCompareForm({ ...compareForm, group_b_cohort_id: e.target.value })}><option value="">Select</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label}</option>)}</select></label>
+          <label>Label, optional<input value={compareForm.label} onChange={e => setCompareForm({ ...compareForm, label: e.target.value })} placeholder="Defaults to Group A vs Group B" /></label>
+          <button className="button secondary">Save comparison</button>
+        </form>}
+
         <form className="card form-stack" onSubmit={addExtraction}><h2>Extract endpoint</h2>
-          <label>Cohort<select required value={ev.cohort_id} onChange={e => setEv({ ...ev, cohort_id: e.target.value })}><option value="">Select</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label} [{c.visibility || 'public'}]</option>)}</select></label>
-          <p className="muted tiny">The extraction inherits the selected cohort's access scope.</p>
+          <label>Study group<select required value={ev.cohort_id} onChange={e => setEv({ ...ev, cohort_id: e.target.value })}><option value="">Select</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label} [{c.cohort_type || 'overall'} • {c.visibility || 'public'}]</option>)}</select></label>
+          <p className="muted tiny">Population/subgroup information belongs on the selected study group as structured facets. The extraction inherits that group's access scope.</p>
           <label>Outcome concept<input required list="outcomes" value={ev.outcome_label} onChange={e => setEv({ ...ev, outcome_label: e.target.value })} /><datalist id="outcomes">{concepts.map(o => <option value={o.label} key={o.id} />)}</datalist></label>
           <label>Type<select value={ev.outcome_type} onChange={e => setEv({ ...ev, outcome_type: e.target.value })}><option value="proportion">Proportion</option><option value="rate">Rate</option><option value="continuous">Continuous</option></select></label>
           <label>Timepoint<input value={ev.timepoint_label} onChange={e => setEv({ ...ev, timepoint_label: e.target.value })} placeholder="e.g., 90 days" /></label>
-          <label>Subgroup<input value={ev.subgroup_label} onChange={e => setEv({ ...ev, subgroup_label: e.target.value })} /></label>
           {ev.outcome_type === 'continuous' ? <><label>Mean<input value={ev.mean} onChange={e => setEv({ ...ev, mean: e.target.value })} /></label><label>SD<input value={ev.sd} onChange={e => setEv({ ...ev, sd: e.target.value })} /></label><label>N<input value={ev.n} onChange={e => setEv({ ...ev, n: e.target.value })} /></label></> : ev.outcome_type === 'rate' ? <><label>Events<input value={ev.events} onChange={e => setEv({ ...ev, events: e.target.value })} /></label><label>Total exposure<input value={ev.total_exposure} onChange={e => setEv({ ...ev, total_exposure: e.target.value })} /></label></> : <><label>Events<input value={ev.events} onChange={e => setEv({ ...ev, events: e.target.value })} /></label><label>N<input value={ev.n} onChange={e => setEv({ ...ev, n: e.target.value })} /></label></>}
           <label>Source location<input value={ev.source_locator} onChange={e => setEv({ ...ev, source_locator: e.target.value })} placeholder="Table 2, p. 7" /></label>
           <label>Notes<textarea rows="3" value={ev.extraction_notes} onChange={e => setEv({ ...ev, extraction_notes: e.target.value })} /></label>
