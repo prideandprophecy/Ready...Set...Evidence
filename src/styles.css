@@ -30,3 +30,11 @@
 @media(max-width:1100px){.brand-subtitle{display:none}.brand{min-width:210px}.brand-logo{width:175px}.top-nav{gap:1px}.top-nav a{padding:8px 7px}}
 @media(max-width:1020px){.top-nav{display:none}.metric-grid.six{grid-template-columns:repeat(3,1fr)}.card-grid{grid-template-columns:repeat(2,1fr)}.filter-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:760px){.site-header{padding:9px 14px}.brand{min-width:0;flex:1}.brand-logo{width:160px}.header-actions .button.ghost,.header-actions .button.text{display:none}.page-wrap{width:min(100% - 24px,1240px);padding-top:24px}.two-column{grid-template-columns:1fr}.metric-grid,.metric-grid.six{grid-template-columns:repeat(2,1fr)}.card-grid{grid-template-columns:1fr}.form-grid,.filter-grid{grid-template-columns:1fr}.span2{grid-column:span 1}.profile-hero{flex-direction:column}.page-title{flex-direction:column}.site-footer{flex-direction:column;align-items:flex-start}.hero h1,.page-title h1,.profile-hero h1{font-size:36px}.hero-search{flex-wrap:wrap}.hero-search input{min-width:200px}.handle-field{display:block}.handle-field span{display:block;padding-bottom:0}.orcid-card{align-items:flex-start;flex-direction:column}}
+
+/* Facet picker: keep the concept text field usable inside narrow sidebars/cards. */
+.facet-picker-controls{display:grid;grid-template-columns:minmax(160px,210px) minmax(220px,1fr);gap:10px;align-items:end}
+.facet-type-field,.facet-query-field{min-width:0}
+.facet-search-input{position:relative;width:100%;min-width:0}
+.facet-search-input svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.55;pointer-events:none}
+.facet-search-input input{width:100%;min-width:0;padding-left:32px}
+@media(max-width:900px){.facet-picker-controls{grid-template-columns:1fr}}

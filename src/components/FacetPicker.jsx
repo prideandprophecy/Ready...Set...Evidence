@@ -116,14 +116,20 @@ export default function FacetPicker({
       </span>)}
     </div>}
 
-    <div className="inline-form">
-      <select value={type} onChange={e => setType(e.target.value)} disabled={disabled}>
-        {FACET_TYPES.map(([value, text]) => <option value={value} key={value}>{text}</option>)}
-      </select>
-      <div style={{ position: 'relative', flex: 1 }}>
-        <Search size={15} style={{ position: 'absolute', left: 10, top: 11, opacity: 0.55 }} />
-        <input style={{ paddingLeft: 32, width: '100%' }} value={query} onChange={e => setQuery(e.target.value)} disabled={disabled} placeholder="Search existing concepts..." />
-      </div>
+    <div className="facet-picker-controls">
+      <label className="facet-type-field">
+        Facet category
+        <select value={type} onChange={e => setType(e.target.value)} disabled={disabled}>
+          {FACET_TYPES.map(([value, text]) => <option value={value} key={value}>{text}</option>)}
+        </select>
+      </label>
+      <label className="facet-query-field">
+        Find or create concept
+        <div className="facet-search-input">
+          <Search size={15} aria-hidden="true" />
+          <input value={query} onChange={e => setQuery(e.target.value)} disabled={disabled} placeholder="Type at least 2 characters..." />
+        </div>
+      </label>
     </div>
 
     {query.trim().length >= 2 && <div className="stack compact">
