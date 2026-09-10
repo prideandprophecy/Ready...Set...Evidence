@@ -284,7 +284,13 @@ export default function WorkPage() {
     <div className="page-title"><div>
       <div className="eyebrow">{work.work_type?.replaceAll('_', ' ')} {work.publication_year ? `• ${work.publication_year}` : ''}</div>
       <h1>{work.title}</h1>
-      <p>{[work.journal, work.doi && `DOI ${work.doi}`, work.pmid && `PMID ${work.pmid}`].filter(Boolean).join(' • ')}</p>
+      <div className="muted" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+        {work.journal && <span>{work.journal}</span>}
+        {work.journal && (work.doi || work.pmid) && <span>•</span>}
+        {work.doi && <a href={`https://doi.org/${String(work.doi).replace(/^https?:\/\/(dx\.)?doi\.org\//i, '')}`} target="_blank" rel="noreferrer">DOI {String(work.doi).replace(/^https?:\/\/(dx\.)?doi\.org\//i, '')}</a>}
+        {work.doi && work.pmid && <span>•</span>}
+        {work.pmid && <span>PMID {work.pmid}</span>}
+      </div>
       <div className="tag-row"><ScopeBadge visibility={work.visibility || (work.is_public ? 'public' : 'private')} orgName={workOrgName} />{claimStatus?.status === 'verified' && <span className="tag verified-tag">Verified author</span>}{claimStatus?.status === 'pending' && <span className="tag">Authorship claim pending</span>}</div>
     </div><div className="row-actions">
       {user && claimStatus?.status !== 'verified' && <button className="button secondary" onClick={claim}>Claim authorship</button>}
