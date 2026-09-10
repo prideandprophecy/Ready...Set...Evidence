@@ -1,5 +1,6 @@
 // Adapted from the original Ready...Set...Evidence synthesis panel.
-// RAW preserves the original quality scale: 1 = strongest appraisal, 4 = weakest.
+// RAW uses the published RSE appraisal direction: 1 = best, 5 = worst.
+// Each study appraisal supplied to RAW should already be the arithmetic mean of its domain scores.
 
 export const WEIGHTING_OPTIONS = [
   ['unweighted', 'Unweighted'],
@@ -153,7 +154,8 @@ export function collapseToStudies(rows, { rateScale='per_1000_days', proportionA
     if (sumW <= 0) continue;
     const mean = usable.reduce((acc,u,i)=>acc+w[i]*u.y,0)/sumW;
     const variance = 1/sumW;
-    const q = Number(studyRows[0]?.community_quality_score);
+    const qRaw = studyRows[0]?.community_quality_score;
+    const q = qRaw === null || qRaw === undefined || qRaw === '' ? NaN : Number(qRaw);
     out.push({
       workId,
       title: studyRows[0]?.work_title || 'Untitled work',
