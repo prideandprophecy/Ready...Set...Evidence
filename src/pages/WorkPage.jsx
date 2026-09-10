@@ -46,6 +46,7 @@ export default function WorkPage() {
   const [msg, setMsg] = useState('');
 
   const [cohortForm, setCohortForm] = useState(emptyCohort);
+  const [pendingFacets, setPendingFacets] = useState([]);
   const [compareForm, setCompareForm] = useState({ label: '', group_a_cohort_id: '', group_b_cohort_id: '' });
   const [ev, setEv] = useState(emptyEvidence);
   const [app, setApp] = useState({ framework_id: '', responses: { domains: {} }, rationale: '', visibility: 'public', owner_org_id: '' });
@@ -193,12 +194,27 @@ export default function WorkPage() {
       created_by: user.id,
     };
     const { data, error } = await supabase.from('rse_cohorts').insert(payload).select().single();
-    setMsg(error ? error.message : 'Study group added. Add structured facets below to describe population, intervention, products, characteristics, setting, or other relevant attributes.');
-    if (!error) {
-      setCohortForm({ ...emptyCohort, label: '' });
-      setEv(x => ({ ...x, cohort_id: x.cohort_id || data.id }));
-      await load();
+    if (error) {
+      setMsg(error.message);
+      return;
     }
+
+    let facetError = null;
+    if (pendingFacets.length) {
+      const rows = pendingFacets.map(concept => ({ cohort_id: data.id, concept_id: concept.id, created_by: user.id }));
+      const facetResult = await supabase.from('rse_cohort_concepts').upsert(rows, { onConflict: 'cohort_id,concept_id' });
+      facetError = facetResult.error;
+    }
+
+    if (facetError) {
+      setMsg(`Study group added, but its structured facets could not be linked: ${facetError.message}`);
+    } else {
+      setMsg(`Study group added${pendingFacets.length ? ` with ${pendingFacets.length} structured facet${pendingFacets.length === 1 ? '' : 's'}` : ''}.`);
+    }
+    setCohortForm({ ...emptyCohort, label: '' });
+    setPendingFacets([]);
+    setEv(x => ({ ...x, cohort_id: x.cohort_id || data.id }));
+    await load();
   }
 
   async function addFacet(cohort, concept) {
@@ -437,8 +453,27 @@ export default function WorkPage() {
           <label>Group type<select value={cohortForm.cohort_type} onChange={e => setCohortForm({ ...cohortForm, cohort_type: e.target.value, parent_cohort_id: e.target.value === 'overall' ? '' : cohortForm.parent_cohort_id })}><option value="overall">Overall cohort</option><option value="arm">Study arm</option><option value="subgroup">Subgroup</option></select></label>
           {cohortForm.cohort_type !== 'overall' && <label>Parent group, optional<select value={cohortForm.parent_cohort_id} onChange={e => setCohortForm({ ...cohortForm, parent_cohort_id: e.target.value })}><option value="">None</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label}</option>)}</select></label>}
           <label>Label<input required value={cohortForm.label} onChange={e => setCohortForm({ ...cohortForm, label: e.target.value })} placeholder="e.g., Treatment arm A, Pediatric subgroup" /></label>
-          <label>Description / population notes<textarea rows="3" value={cohortForm.description} onChange={e => setCohortForm({ ...cohortForm, description: e.target.value })} placeholder="Narrative details that do not need to be synthesis filters" /></label>
+          <label>Description / notes<textarea rows="3" value={cohortForm.description} onChange={e => setCohortForm({ ...cohortForm, description: e.target.value })} placeholder="Narrative details that do not need to be synthesis filters" /></label>
           <label>Sample size<input value={cohortForm.sample_size} onChange={e => setCohortForm({ ...cohortForm, sample_size: e.target.value })} /></label>
+
+          <div className="subtle-callout">
+            <strong>Structured cohort facets</strong>
+            <div className="muted tiny">Add the attributes you expect to filter on later in synthesis. Examples: Pediatric, a disease/indication, a named device or drug, a treatment strategy, a setting, or a characteristic/variant. These are reusable controlled concepts rather than free-text cohort fields.</div>
+          </div>
+          <FacetPicker
+            selected={pendingFacets}
+            onAdd={concept => setPendingFacets(current => current.some(x => x.id === concept.id) ? current : [...current, concept])}
+            onRemove={concept => setPendingFacets(current => current.filter(x => x.id !== concept.id))}
+            allowCreate
+            conceptVisibility={cohortForm.visibility || 'public'}
+            ownerOrgId={cohortForm.owner_org_id || null}
+            searchOrgId={cohortForm.visibility === 'organization' ? cohortForm.owner_org_id : null}
+            includePrivate={cohortForm.visibility === 'private'}
+            label="Add facets before saving this study group"
+            help="Choose a facet category, type at least two characters, select an existing suggestion when possible, or create a new canonical concept when the concept does not exist."
+          />
+
+          {pendingFacets.length > 0 && <div className="muted tiny">These {pendingFacets.length} facet{pendingFacets.length === 1 ? '' : 's'} will be attached automatically when you save the study group.</div>}
           <button className="button secondary">Add study group</button>
         </form>
 
