@@ -22,6 +22,21 @@ function GroupTypeBadge({ type }) {
   return <span className="tag">{label}</span>;
 }
 
+function ProposalList({ items = [], canResolve = false, onResolve }) {
+  if (!items.length) return null;
+  return <div className="subtle-callout" style={{ marginTop: 12 }}>
+    <strong>Suggested edits</strong>
+    {items.map(p => <div key={p.id} style={{ marginTop: 10 }}>
+      <div className="tiny"><strong>{p.creator?.display_name || p.creator?.username || 'Contributor'}</strong>: {p.rationale}</div>
+      <div className="muted tiny">{Object.entries(p.proposed_patch || {}).map(([k, v]) => `${k.replaceAll('_', ' ')} → ${v ?? 'blank'}`).join(' • ')}</div>
+      {canResolve && <div className="row-actions" style={{ marginTop: 6 }}>
+        <button type="button" className="button mini" onClick={() => onResolve(p, 'accepted')}>Accept</button>
+        <button type="button" className="button mini ghost" onClick={() => onResolve(p, 'rejected')}>Reject</button>
+      </div>}
+    </div>)}
+  </div>;
+}
+
 export default function WorkPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -43,6 +58,11 @@ export default function WorkPage() {
   const [canEditWork, setCanEditWork] = useState(false);
   const [editingWork, setEditingWork] = useState(false);
   const [workForm, setWorkForm] = useState({});
+  const [editProposals, setEditProposals] = useState([]);
+  const [editingCohortId, setEditingCohortId] = useState(null);
+  const [cohortEdit, setCohortEdit] = useState({});
+  const [editingSlotId, setEditingSlotId] = useState(null);
+  const [slotEdit, setSlotEdit] = useState({});
   const [msg, setMsg] = useState('');
 
   const [cohortForm, setCohortForm] = useState(emptyCohort);
@@ -73,7 +93,7 @@ export default function WorkPage() {
     const slotIds = (s.data || []).map(x => x.id);
 
     const [facetLinks, comps, e, v] = await Promise.all([
-      cohortIds.length ? supabase.from('rse_cohort_concepts').select('cohort_id,concept:rse_concepts(id,canonical_label,concept_type,visibility,owner_org_id,parent_concept_id)').in('cohort_id', cohortIds) : Promise.resolve({ data: [] }),
+      cohortIds.length ? supabase.from('rse_cohort_concepts').select('cohort_id,concept:rse_concepts(id,canonical_label,concept_type,visibility,owner_org_id,parent_concept_id,created_by)').in('cohort_id', cohortIds) : Promise.resolve({ data: [] }),
       supabase.from('rse_comparisons').select('*').eq('work_id', id).order('created_at'),
       slotIds.length ? supabase.from('rse_extractions').select('*,creator:rse_profiles!created_by(username,display_name)').in('slot_id', slotIds).order('created_at') : Promise.resolve({ data: [] }),
       slotIds.length ? supabase.from('rse_extraction_votes').select('*').in('slot_id', slotIds) : Promise.resolve({ data: [] }),
@@ -82,6 +102,15 @@ export default function WorkPage() {
     const extractionIds = (e.data || []).map(x => x.id);
     const ch = extractionIds.length
       ? await supabase.from('rse_challenges').select('*').in('extraction_id', extractionIds).order('created_at', { ascending: false })
+      : { data: [] };
+
+    const conceptIds = [...new Set((facetLinks.data || []).map(x => x.concept?.id).filter(Boolean))];
+    const proposalTargetIds = [...new Set([...cohortIds, ...slotIds, ...extractionIds, ...conceptIds])];
+    const proposals = proposalTargetIds.length
+      ? await supabase.from('rse_edit_proposals')
+          .select('*,creator:rse_profiles!created_by(username,display_name)')
+          .in('target_id', proposalTargetIds)
+          .order('created_at', { ascending: false })
       : { data: [] };
 
     const facetMap = {};
@@ -107,6 +136,7 @@ export default function WorkPage() {
     setWorkVersions(versions.data || []);
     setClaimStatus(claim.data || null);
     setCanEditWork(Boolean(editPermission.data));
+    setEditProposals(proposals.data || []);
 
     if (w.data) {
       setWorkForm({
@@ -139,6 +169,40 @@ export default function WorkPage() {
   function canEditGroup(cohort) {
     if (!user || !cohort) return false;
     return canEditWork || cohort.created_by === user.id || (cohort.visibility === 'organization' && orgs.some(o => o.id === cohort.owner_org_id));
+  }
+
+  function canEditSlot(slot) {
+    if (!user || !slot) return false;
+    return canEditWork || slot.created_by === user.id;
+  }
+
+  const proposalsFor = (targetType, targetId) =>
+    editProposals.filter(p => p.target_type === targetType && p.target_id === targetId && p.status === 'open');
+
+  async function submitEditProposal(targetType, targetId, proposalKind, proposedPatch, rationale) {
+    if (!user) return;
+    const { error } = await supabase.from('rse_edit_proposals').insert({
+      target_type: targetType,
+      target_id: targetId,
+      proposal_kind: proposalKind || 'edit',
+      proposed_patch: proposedPatch || {},
+      rationale,
+      created_by: user.id,
+    });
+    setMsg(error ? error.message : 'Suggested edit submitted for review.');
+    if (!error) await load();
+  }
+
+  async function resolveEditProposal(proposal, status) {
+    if (!user) return;
+    const notes = window.prompt(`Resolution note for ${status}:`, '') || null;
+    const { error } = await supabase.rpc('rse_resolve_edit_proposal', {
+      p_proposal_id: proposal.id,
+      p_status: status,
+      p_resolution_notes: notes,
+    });
+    setMsg(error ? error.message : `Suggested edit ${status}.`);
+    if (!error) await load();
   }
 
   function chooseFramework(frameworkId, frameworkRows = frameworks, existingRows = appraisals, publicationYear = work?.publication_year) {
@@ -229,6 +293,144 @@ export default function WorkPage() {
     const { error } = await supabase.from('rse_cohort_concepts').delete().eq('cohort_id', cohort.id).eq('concept_id', concept.id);
     setMsg(error ? error.message : `${concept.canonical_label} removed from ${cohort.label}.`);
     if (!error) await load();
+  }
+
+  function startEditCohort(cohort) {
+    setEditingCohortId(cohort.id);
+    setCohortEdit({
+      label: cohort.label || '',
+      description: cohort.description || '',
+      cohort_type: cohort.cohort_type || 'overall',
+      parent_cohort_id: cohort.parent_cohort_id || '',
+      sample_size: cohort.sample_size ?? '',
+      visibility: cohort.visibility || 'public',
+      owner_org_id: cohort.owner_org_id || '',
+      change_reason: '',
+    });
+  }
+
+  async function saveCohortEdit(e, cohort) {
+    e.preventDefault();
+    if (!canEditGroup(cohort)) return;
+    const payload = {
+      label: cohortEdit.label.trim(),
+      description: cohortEdit.description || null,
+      cohort_type: cohortEdit.cohort_type,
+      parent_cohort_id: cohortEdit.cohort_type === 'overall' ? null : (cohortEdit.parent_cohort_id || null),
+      sample_size: num(cohortEdit.sample_size),
+      visibility: cohortEdit.visibility,
+      owner_org_id: cohortEdit.visibility === 'organization' ? (cohortEdit.owner_org_id || null) : null,
+      last_change_reason: cohortEdit.change_reason.trim() || 'Study-group correction',
+    };
+    const { error } = await supabase.from('rse_cohorts').update(payload).eq('id', cohort.id);
+    setMsg(error ? error.message : 'Study group updated and versioned.');
+    if (!error) {
+      setEditingCohortId(null);
+      setCohortEdit({});
+      await load();
+    }
+  }
+
+  async function proposeCohortEdit(cohort) {
+    if (!user) return;
+    const label = window.prompt('Proposed study-group label', cohort.label || '');
+    if (label == null) return;
+    const description = window.prompt('Proposed description / notes', cohort.description || '');
+    if (description == null) return;
+    const sampleSize = window.prompt('Proposed sample size', cohort.sample_size ?? '');
+    if (sampleSize == null) return;
+    const rationale = window.prompt('Why should this study group be changed?');
+    if (!rationale) return;
+    const patch = {};
+    if (label.trim() !== (cohort.label || '')) patch.label = label.trim();
+    if (description !== (cohort.description || '')) patch.description = description;
+    if (String(sampleSize) !== String(cohort.sample_size ?? '')) patch.sample_size = sampleSize;
+    if (!Object.keys(patch).length) {
+      setMsg('No changes were proposed.');
+      return;
+    }
+    await submitEditProposal('cohort', cohort.id, 'edit', patch, rationale);
+  }
+
+  async function suggestFacetRename(concept) {
+    if (!user) return;
+    const proposed = window.prompt('Proposed canonical name for this facet', concept.canonical_label || '');
+    if (!proposed || proposed.trim() === concept.canonical_label) return;
+    const rationale = window.prompt('Why should this canonical facet name change?');
+    if (!rationale) return;
+    await submitEditProposal('concept', concept.id, 'rename', { canonical_label: proposed.trim() }, rationale);
+  }
+
+  function startEditSlot(slot) {
+    setEditingSlotId(slot.id);
+    setSlotEdit({
+      cohort_id: slot.cohort_id || '',
+      outcome_type: slot.outcome_type || 'proportion',
+      timepoint_label: slot.timepoint_label || '',
+      units: slot.units || '',
+      notes: slot.notes || '',
+      change_reason: '',
+    });
+  }
+
+  async function saveSlotEdit(e, slot) {
+    e.preventDefault();
+    if (!canEditSlot(slot)) return;
+    const { error } = await supabase.from('rse_evidence_slots').update({
+      cohort_id: slotEdit.cohort_id,
+      outcome_type: slotEdit.outcome_type,
+      timepoint_label: slotEdit.timepoint_label || '',
+      units: slotEdit.units || null,
+      notes: slotEdit.notes || null,
+      last_change_reason: slotEdit.change_reason.trim() || 'Endpoint-definition correction',
+    }).eq('id', slot.id);
+    setMsg(error ? error.message : 'Endpoint definition updated and versioned.');
+    if (!error) {
+      setEditingSlotId(null);
+      setSlotEdit({});
+      await load();
+    }
+  }
+
+  async function proposeSlotEdit(slot) {
+    if (!user) return;
+    const timepoint = window.prompt('Proposed timepoint', slot.timepoint_label || '');
+    if (timepoint == null) return;
+    const units = window.prompt('Proposed units', slot.units || '');
+    if (units == null) return;
+    const notes = window.prompt('Proposed endpoint notes', slot.notes || '');
+    if (notes == null) return;
+    const rationale = window.prompt('Why should this endpoint definition be changed?');
+    if (!rationale) return;
+    const patch = {};
+    if (timepoint !== (slot.timepoint_label || '')) patch.timepoint_label = timepoint;
+    if (units !== (slot.units || '')) patch.units = units;
+    if (notes !== (slot.notes || '')) patch.notes = notes;
+    if (!Object.keys(patch).length) {
+      setMsg('No changes were proposed.');
+      return;
+    }
+    await submitEditProposal('evidence_slot', slot.id, 'edit', patch, rationale);
+  }
+
+  async function proposeExtractionEdit(x) {
+    if (!user) return;
+    const events = window.prompt('Proposed events', x.events ?? '');
+    if (events == null) return;
+    const n = window.prompt('Proposed N', x.n ?? '');
+    if (n == null) return;
+    const exposure = window.prompt('Proposed total exposure', x.total_exposure ?? '');
+    if (exposure == null) return;
+    const mean = window.prompt('Proposed mean', x.mean ?? '');
+    if (mean == null) return;
+    const sd = window.prompt('Proposed SD', x.sd ?? '');
+    if (sd == null) return;
+    const source = window.prompt('Proposed source location', x.source_locator ?? '');
+    if (source == null) return;
+    const rationale = window.prompt('Why should this extraction be corrected?');
+    if (!rationale) return;
+    const patch = { events, n, total_exposure: exposure, mean, sd, source_locator: source };
+    await submitEditProposal('extraction', x.id, 'edit', patch, rationale);
   }
 
   async function addComparison(e) {
@@ -405,11 +607,32 @@ export default function WorkPage() {
           const parent = cohortMap.get(c.parent_cohort_id);
           const facets = cohortFacets[c.id] || [];
           return <div className="card" key={c.id} style={{ margin: 0 }}>
-            <div className="slot-head"><div><h3>{c.label}</h3><div className="tag-row"><GroupTypeBadge type={c.cohort_type} /><ScopeBadge visibility={c.visibility || 'public'} orgName={orgMap.get(c.owner_org_id)?.name} /></div></div>{c.sample_size != null && <span className="tag">n={c.sample_size}</span>}</div>
+            <div className="slot-head">
+              <div><h3>{c.label}</h3><div className="tag-row"><GroupTypeBadge type={c.cohort_type} /><ScopeBadge visibility={c.visibility || 'public'} orgName={orgMap.get(c.owner_org_id)?.name} /></div></div>
+              <div className="row-actions">
+                {c.sample_size != null && <span className="tag">n={c.sample_size}</span>}
+                {user && (canEditGroup(c)
+                  ? <button type="button" className="button mini ghost" onClick={() => startEditCohort(c)}><Edit3 size={13} /> Edit group</button>
+                  : <button type="button" className="button mini ghost" onClick={() => proposeCohortEdit(c)}>Suggest edit</button>)}
+              </div>
+            </div>
             {parent && <div className="muted tiny">Parent group: {parent.label}</div>}
             {c.description && <p>{c.description}</p>}
             {(c.patient_population || c.intervention || c.indication || c.comparator) && <div className="subtle-callout"><strong>Legacy cohort fields:</strong> {[c.patient_population, c.intervention, c.indication, c.comparator].filter(Boolean).join(' • ')}. These remain preserved but new synthesis uses structured facets.</div>}
-            {facets.length > 0 && <div className="tag-row">{facets.map(f => <span className="tag" key={f.id}><span className="muted tiny">{facetTypeLabel(f.concept_type)}:</span>&nbsp;{f.canonical_label}</span>)}</div>}
+
+            {editingCohortId === c.id && canEditGroup(c) && <form className="form-grid" onSubmit={e => saveCohortEdit(e, c)} style={{ marginTop: 14 }}>
+              <label>Group type<select value={cohortEdit.cohort_type || 'overall'} onChange={e => setCohortEdit({ ...cohortEdit, cohort_type: e.target.value, parent_cohort_id: e.target.value === 'overall' ? '' : cohortEdit.parent_cohort_id })}><option value="overall">Overall cohort</option><option value="arm">Study arm</option><option value="subgroup">Subgroup</option></select></label>
+              {cohortEdit.cohort_type !== 'overall' && <label>Parent group<select value={cohortEdit.parent_cohort_id || ''} onChange={e => setCohortEdit({ ...cohortEdit, parent_cohort_id: e.target.value })}><option value="">None</option>{cohorts.filter(x => x.id !== c.id).map(x => <option key={x.id} value={x.id}>{x.label}</option>)}</select></label>}
+              <label className="span2">Label<input required value={cohortEdit.label || ''} onChange={e => setCohortEdit({ ...cohortEdit, label: e.target.value })} /></label>
+              <label className="span2">Description / notes<textarea rows="3" value={cohortEdit.description || ''} onChange={e => setCohortEdit({ ...cohortEdit, description: e.target.value })} /></label>
+              <label>Sample size<input value={cohortEdit.sample_size ?? ''} onChange={e => setCohortEdit({ ...cohortEdit, sample_size: e.target.value })} /></label>
+              <label>Evidence access<select value={cohortEdit.visibility || 'public'} onChange={e => setCohortEdit({ ...cohortEdit, visibility: e.target.value, owner_org_id: e.target.value === 'organization' ? cohortEdit.owner_org_id : '' })}><option value="public">Public Commons</option><option value="private">Private to me</option><option value="organization">Organization only</option></select></label>
+              {cohortEdit.visibility === 'organization' && <label className="span2">Organization<select required value={cohortEdit.owner_org_id || ''} onChange={e => setCohortEdit({ ...cohortEdit, owner_org_id: e.target.value })}><option value="">Select</option>{orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>}
+              <label className="span2">Reason for change<input required value={cohortEdit.change_reason || ''} onChange={e => setCohortEdit({ ...cohortEdit, change_reason: e.target.value })} placeholder="What changed and why?" /></label>
+              <div className="span2 row-actions"><button className="button primary">Save group revision</button><button type="button" className="button ghost" onClick={() => setEditingCohortId(null)}>Cancel</button></div>
+            </form>}
+
+            {facets.length > 0 && <div className="tag-row">{facets.map(f => <span className="tag" key={f.id}><span className="muted tiny">{facetTypeLabel(f.concept_type)}:</span>&nbsp;{f.canonical_label}{user && <button type="button" title="Suggest a better canonical name" onClick={() => suggestFacetRename(f)} style={{ border: 0, background: 'transparent', color: '#143A6F', padding: '0 0 0 6px', cursor: 'pointer', fontSize: '.78em' }}>rename?</button>}</span>)}</div>}
             {canEditGroup(c) && <FacetPicker
               selected={facets}
               onAdd={concept => addFacet(c, concept)}
@@ -422,6 +645,8 @@ export default function WorkPage() {
               label="Add or remove structured facets"
               help="Examples can be as broad or granular as the evidence requires. Characteristics/variants are generic, not device-specific fields."
             />}
+            <ProposalList items={proposalsFor('cohort', c.id)} canResolve={canEditGroup(c)} onResolve={resolveEditProposal} />
+            {facets.map(f => <ProposalList key={`proposal-${f.id}`} items={proposalsFor('concept', f.id)} canResolve={f.created_by === user?.id || (f.visibility === 'organization' && orgs.some(o => o.id === f.owner_org_id))} onResolve={resolveEditProposal} />)}
           </div>;
         })}
         {!cohorts.length && <div className="empty-state">No study groups yet.</div>}
@@ -437,8 +662,27 @@ export default function WorkPage() {
         const cohort = cohortMap.get(s.cohort_id);
         const facets = cohortFacets[s.cohort_id] || [];
         return <div className="card evidence-slot" key={s.id}>
-          <div className="slot-head"><div><h3>{conceptMap.get(s.outcome_concept_id)?.label || 'Outcome'}</h3><div className="muted">{cohort?.label} {s.timepoint_label && `• ${s.timepoint_label}`} {s.subgroup_label && `• legacy subgroup: ${s.subgroup_label}`} • {s.outcome_type}</div>{facets.length > 0 && <div className="muted tiny">{facetSummary(facets)}</div>}<div className="tag-row"><ScopeBadge visibility={cohort?.visibility || 'public'} orgName={orgMap.get(cohort?.owner_org_id)?.name} /></div></div><span className="tag">{extractions.filter(x => x.slot_id === s.id).length} proposal(s)</span></div>
-          {extractions.filter(x => x.slot_id === s.id).map(x => <div className={`extraction-row ${myVote(s.id) === x.id ? 'selected' : ''}`} key={x.id}><div><strong>{s.outcome_type === 'continuous' ? `mean ${x.mean} (SD ${x.sd}), n=${x.n}` : s.outcome_type === 'rate' ? `${x.events} events / ${x.total_exposure} exposure` : `${x.events}/${x.n}`}</strong><div className="muted tiny">Source: {x.source_locator || 'not specified'} • Extracted by {x.creator?.display_name || x.creator?.username || 'contributor'} • {voteCount(x.id)} confirmations</div>{x.extraction_notes && <div className="tiny">{x.extraction_notes}</div>}</div><div className="row-actions">{user && <button className="button mini" onClick={() => vote(s.id, x.id)}><Vote size={14} /> {myVote(s.id) === x.id ? 'Confirmed' : 'Confirm'}</button>}{user && <button className="button mini ghost" onClick={() => challenge(x.id)}><Flag size={14} /> Challenge</button>}{user?.id === x.created_by && <button className="button mini ghost" onClick={() => editExtraction(x)}>Edit</button>}</div></div>)}
+          <div className="slot-head">
+            <div><h3>{conceptMap.get(s.outcome_concept_id)?.label || 'Outcome'}</h3><div className="muted">{cohort?.label} {s.timepoint_label && `• ${s.timepoint_label}`} {s.subgroup_label && `• legacy subgroup: ${s.subgroup_label}`} • {s.outcome_type}</div>{facets.length > 0 && <div className="muted tiny">{facetSummary(facets)}</div>}<div className="tag-row"><ScopeBadge visibility={cohort?.visibility || 'public'} orgName={orgMap.get(cohort?.owner_org_id)?.name} /></div></div>
+            <div className="row-actions"><span className="tag">{extractions.filter(x => x.slot_id === s.id).length} proposal(s)</span>{user && (canEditSlot(s) ? <button type="button" className="button mini ghost" onClick={() => startEditSlot(s)}><Edit3 size={13} /> Edit endpoint</button> : <button type="button" className="button mini ghost" onClick={() => proposeSlotEdit(s)}>Suggest endpoint edit</button>)}</div>
+          </div>
+
+          {editingSlotId === s.id && canEditSlot(s) && <form className="form-grid" onSubmit={e => saveSlotEdit(e, s)} style={{ margin: '12px 0' }}>
+            <label>Study group<select value={slotEdit.cohort_id || ''} onChange={e => setSlotEdit({ ...slotEdit, cohort_id: e.target.value })}>{cohorts.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
+            <label>Outcome type<select value={slotEdit.outcome_type || 'proportion'} onChange={e => setSlotEdit({ ...slotEdit, outcome_type: e.target.value })}><option value="proportion">Proportion</option><option value="rate">Rate</option><option value="continuous">Continuous</option></select></label>
+            <label>Timepoint<input value={slotEdit.timepoint_label || ''} onChange={e => setSlotEdit({ ...slotEdit, timepoint_label: e.target.value })} /></label>
+            <label>Units<input value={slotEdit.units || ''} onChange={e => setSlotEdit({ ...slotEdit, units: e.target.value })} /></label>
+            <label className="span2">Endpoint notes<textarea rows="2" value={slotEdit.notes || ''} onChange={e => setSlotEdit({ ...slotEdit, notes: e.target.value })} /></label>
+            <label className="span2">Reason for change<input required value={slotEdit.change_reason || ''} onChange={e => setSlotEdit({ ...slotEdit, change_reason: e.target.value })} placeholder="What changed and why?" /></label>
+            <div className="span2 row-actions"><button className="button primary">Save endpoint revision</button><button type="button" className="button ghost" onClick={() => setEditingSlotId(null)}>Cancel</button></div>
+          </form>}
+
+          <ProposalList items={proposalsFor('evidence_slot', s.id)} canResolve={canEditSlot(s)} onResolve={resolveEditProposal} />
+
+          {extractions.filter(x => x.slot_id === s.id).map(x => <div key={x.id}>
+            <div className={`extraction-row ${myVote(s.id) === x.id ? 'selected' : ''}`}><div><strong>{s.outcome_type === 'continuous' ? `mean ${x.mean} (SD ${x.sd}), n=${x.n}` : s.outcome_type === 'rate' ? `${x.events} events / ${x.total_exposure} exposure` : `${x.events}/${x.n}`}</strong><div className="muted tiny">Source: {x.source_locator || 'not specified'} • Extracted by {x.creator?.display_name || x.creator?.username || 'contributor'} • {voteCount(x.id)} confirmations</div>{x.extraction_notes && <div className="tiny">{x.extraction_notes}</div>}</div><div className="row-actions">{user && <button className="button mini" onClick={() => vote(s.id, x.id)}><Vote size={14} /> {myVote(s.id) === x.id ? 'Confirmed' : 'Confirm'}</button>}{user && <button className="button mini ghost" onClick={() => challenge(x.id)}><Flag size={14} /> Challenge</button>}{user?.id === x.created_by ? <button className="button mini ghost" onClick={() => editExtraction(x)}>Edit values</button> : user && <button className="button mini ghost" onClick={() => proposeExtractionEdit(x)}>Suggest correction</button>}</div></div>
+            <ProposalList items={proposalsFor('extraction', x.id)} canResolve={user?.id === x.created_by || canEditWork} onResolve={resolveEditProposal} />
+          </div>)}
         </div>;
       })}
       {!slots.length && <div className="empty-state">No structured endpoints yet. Be the first contributor.</div>}
