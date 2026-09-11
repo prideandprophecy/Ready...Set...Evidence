@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Sparkles } from 'lucide-react';
+import { FileCheck2, RadioTower, Search, Sparkles } from 'lucide-react';
 import { supabase } from '../supabaseClient';
-import { ActivityList, MetricCard, WorkCard } from '../components/Common';
-import { compactNumber } from '../lib/identifiers';
+import { ActivityList, MetricCard, ProfileLink, WorkCard } from '../components/Common';
+import { compactNumber, formatDate } from '../lib/identifiers';
 
 async function hydrateActors(events) {
   const ids = [...new Set((events || []).map(e => e.actor_id).filter(Boolean))];
@@ -29,8 +29,8 @@ export default function ExplorePage() {
     const [m, w, r, l, a] = await Promise.all([
       supabase.rpc('rse_global_metrics'),
       supabase.rpc('rse_search_public_works', { p_query: search.trim() || null, p_year: null, p_limit: 12, p_offset: 0 }),
-      supabase.from('rse_reviews').select('id,slug,title,review_type,abstract,published_at').eq('status', 'published').eq('visibility', 'public').order('published_at', { ascending: false }).limit(6),
-      supabase.from('rse_live_views').select('id,slug,title,description,weighting,updated_at').eq('is_public', true).order('updated_at', { ascending: false }).limit(6),
+      supabase.from('rse_reviews').select('id,slug,title,review_type,abstract,published_at,owner:rse_profiles!owner_user_id(username,display_name)').eq('status', 'published').eq('visibility', 'public').order('published_at', { ascending: false }).limit(6),
+      supabase.from('rse_live_views').select('id,slug,title,description,weighting,updated_at,owner:rse_profiles!owner_user_id(username,display_name)').eq('is_public', true).order('updated_at', { ascending: false }).limit(6),
       supabase.from('rse_activity_events').select('*').eq('is_public', true).order('created_at', { ascending: false }).limit(12),
     ]);
     setMetrics(m.data || {});
@@ -41,11 +41,16 @@ export default function ExplorePage() {
     setLoading(false);
   }
 
+  const evidencePages = [
+    ...live.map(x => ({ ...x, kind: 'living', date: x.updated_at })),
+    ...reviews.map(x => ({ ...x, kind: 'snapshot', date: x.published_at })),
+  ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).slice(0, 8);
+
   return <>
     <section className="hero">
       <div className="eyebrow"><Sparkles size={15} /> Collaborative evidence, not isolated reviews</div>
       <h1>Build on evidence that has already been extracted.</h1>
-      <p>Find papers, reuse structured endpoints, compare competing extractions, contribute appraisals, create reproducible reviews, and publish live bodies of evidence.</p>
+      <p>Find papers, reuse structured endpoints, compare competing extractions, contribute appraisals, build living syntheses, and preserve reproducible evidence snapshots.</p>
       <form className="hero-search" onSubmit={e => { e.preventDefault(); load(q); }}>
         <Search size={19} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search title, author, DOI, PMID, journal, abstract..." /><button className="button primary">Search</button>
       </form>
@@ -58,7 +63,7 @@ export default function ExplorePage() {
       <MetricCard label="Study groups" value={compactNumber(metrics.study_groups)} />
       <MetricCard label="Appraisals" value={compactNumber(metrics.appraisals)} />
       <MetricCard label="Contributors" value={compactNumber(metrics.contributors)} />
-      <MetricCard label="Published reviews" value={compactNumber(metrics.published_reviews)} />
+      <MetricCard label="Published snapshots" value={compactNumber(metrics.published_reviews)} />
     </section>
 
     <div className="two-column">
@@ -67,12 +72,8 @@ export default function ExplorePage() {
       <aside><div className="section-heading"><div><div className="eyebrow">Community</div><h2>Recent contributions</h2></div></div><ActivityList events={events} /></aside>
     </div>
 
-    <section className="section-block"><div className="section-heading"><div><div className="eyebrow">Living evidence</div><h2>Live comparisons</h2></div><Link to="/synthesize">Create one</Link></div>
-      <div className="card-grid">{live.map(v => <Link className="card link-card" key={v.id} to={`/live/${v.slug}`}><div className="eyebrow">{v.weighting?.toUpperCase()}</div><h3>{v.title}</h3><p>{v.description || 'A live synthesis that updates as consensus evidence changes.'}</p></Link>)}{!live.length && <div className="card muted">No public live views yet.</div>}</div>
-    </section>
-
-    <section className="section-block"><div className="section-heading"><div><div className="eyebrow">Published work</div><h2>Reviews built on the Commons</h2></div><Link to="/reviews">All reviews</Link></div>
-      <div className="card-grid">{reviews.map(r => <Link className="card link-card" key={r.id} to={`/review/${r.slug}`}><div className="eyebrow">{r.review_type?.replaceAll('_', ' ')}</div><h3>{r.title}</h3><p>{r.abstract || 'Open the review to inspect its evidence and audit trail.'}</p></Link>)}{!reviews.length && <div className="card muted">No public reviews yet.</div>}</div>
+    <section className="section-block"><div className="section-heading"><div><div className="eyebrow">Evidence Pages</div><h2>Living evidence and published snapshots</h2></div><Link to="/pages">Browse all</Link></div>
+      <div className="card-grid">{evidencePages.map(v => v.kind === 'living' ? <article className="card link-card" key={`live-${v.id}`}><div className="eyebrow"><RadioTower size={14} /> Living evidence • {v.weighting?.toUpperCase()}</div><h3><Link to={`/live/${v.slug}`}>{v.title}</Link></h3><p>{v.description || 'A live synthesis that updates as consensus evidence changes.'}</p><div className="muted tiny">Updated {formatDate(v.updated_at)} • by <ProfileLink profile={v.owner} /></div></article> : <article className="card link-card" key={`review-${v.id}`}><div className="eyebrow"><FileCheck2 size={14} /> Frozen evidence snapshot</div><h3><Link to={`/review/${v.slug}`}>{v.title}</Link></h3><p>{v.abstract || 'A reproducible snapshot with frozen evidence and an audit trail.'}</p><div className="muted tiny">Published {formatDate(v.published_at)} • by <ProfileLink profile={v.owner} /></div></article>)}{!evidencePages.length && <div className="card muted">No public evidence pages yet.</div>}</div>
     </section>
   </>;
 }

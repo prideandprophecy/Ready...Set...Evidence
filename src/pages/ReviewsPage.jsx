@@ -1,7 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { supabase } from '../supabaseClient';
-import { useAuth } from '../context/AuthContext';
-import { slugify } from '../lib/identifiers';
+import { Navigate } from 'react-router-dom';
 
-export default function ReviewsPage(){const {user}=useAuth();const nav=useNavigate();const [reviews,setReviews]=useState([]);useEffect(()=>{load();},[user?.id]);async function load(){let q=supabase.from('rse_reviews').select('*').order('updated_at',{ascending:false}).limit(100);const {data}=await q;setReviews(data||[]);}async function create(){if(!user)return nav('/auth');const title=window.prompt('Review title');if(!title)return;const id=Math.random().toString(36).slice(2,7);const {data,error}=await supabase.from('rse_reviews').insert({slug:`${slugify(title)}-${id}`,title,owner_user_id:user.id,status:'draft',visibility:'private'}).select().single();if(!error)nav(`/review/${data.slug}/edit`);}return <section><div className="page-title"><div><div className="eyebrow">Reviews</div><h1>Reproducible reviews built from shared evidence</h1><p>Reviews preserve search strategies, inclusion decisions, and frozen versions of selected endpoint extractions.</p></div><button className="button primary" onClick={create}>Create review</button></div><div className="card-grid">{reviews.map(r=><Link className="card link-card" key={r.id} to={`/review/${r.slug}`}><div className="eyebrow">{r.status} • {r.review_type?.replaceAll('_',' ')}</div><h3>{r.title}</h3><p>{r.research_question||r.abstract||'Open to inspect the evidence and methods.'}</p></Link>)}</div></section>}
+export default function ReviewsPage() {
+  return <Navigate to="/pages" replace />;
+}

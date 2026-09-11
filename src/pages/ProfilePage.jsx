@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Award, CheckCircle2, Copy, ExternalLink, UserMinus, UserPlus } from 'lucide-react';
+import { Award, Bookmark, CheckCircle2, Copy, ExternalLink, UserMinus, UserPlus } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import { ActivityList, MetricCard } from '../components/Common';
+import { ActivityList, DoiLink, MetricCard } from '../components/Common';
 import { compactNumber, normalizeUsername, normalizeWebsiteUrl, usernameIsValid } from '../lib/identifiers';
 
 export default function ProfilePage() {
@@ -15,6 +15,7 @@ export default function ProfilePage() {
   const [events, setEvents] = useState([]);
   const [orgs, setOrgs] = useState([]);
   const [papers, setPapers] = useState([]);
+  const [favorites, setFavorites] = useState({ works: [], live: [], reviews: [] });
   const [following, setFollowing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
@@ -24,6 +25,20 @@ export default function ProfilePage() {
   const isSelf = Boolean(user && p && user.id === p.id);
 
   useEffect(() => { load(); }, [username, user?.id]);
+
+  async function loadFavorites(profileId, self) {
+    if (!self) { setFavorites({ works: [], live: [], reviews: [] }); return; }
+    const { data: favs } = await supabase.from('rse_favorites').select('target_type,target_id,created_at').eq('user_id', profileId).order('created_at', { ascending: false });
+    const grouped = { work: [], live_view: [], review: [] };
+    for (const f of favs || []) grouped[f.target_type]?.push(f.target_id);
+    const [w, l, r] = await Promise.all([
+      grouped.work.length ? supabase.from('rse_works').select('id,title,publication_year,journal,doi').in('id', grouped.work) : Promise.resolve({ data: [] }),
+      grouped.live_view.length ? supabase.from('rse_live_views').select('id,slug,title,description,visibility').in('id', grouped.live_view) : Promise.resolve({ data: [] }),
+      grouped.review.length ? supabase.from('rse_reviews').select('id,slug,title,status,version_tag,visibility').in('id', grouped.review) : Promise.resolve({ data: [] }),
+    ]);
+    const order = (items, ids) => [...(items || [])].sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+    setFavorites({ works: order(w.data, grouped.work), live: order(l.data, grouped.live_view), reviews: order(r.data, grouped.review) });
+  }
 
   async function load() {
     setLoading(true);
@@ -44,12 +59,13 @@ export default function ProfilePage() {
 
     setP(prof || null);
     if (!prof) { setLoading(false); return; }
+    const self = Boolean(user && user.id === prof.id);
 
     const [m, a, o, c, f] = await Promise.all([
       supabase.from('rse_profile_metrics').select('*').eq('id', prof.id).maybeSingle(),
       supabase.from('rse_activity_events').select('*').eq('actor_id', prof.id).eq('is_public', true).order('created_at', { ascending: false }).limit(15),
       supabase.from('rse_org_members').select('role,status,org:rse_organizations(id,slug,name,is_verified)').eq('user_id', prof.id).eq('status', 'active'),
-      supabase.from('rse_authorship_claims').select('status,work:rse_works(id,title,publication_year,journal)').eq('user_id', prof.id).eq('status', 'verified'),
+      supabase.from('rse_authorship_claims').select('status,work:rse_works(id,title,publication_year,journal,doi)').eq('user_id', prof.id).eq('status', 'verified'),
       user && user.id !== prof.id ? supabase.from('rse_follows').select('*').eq('follower_id', user.id).eq('following_id', prof.id).maybeSingle() : Promise.resolve({ data: null }),
     ]);
 
@@ -68,6 +84,7 @@ export default function ProfilePage() {
       expertise: (prof.expertise || []).join(', '),
       is_public: prof.is_public,
     });
+    await loadFavorites(prof.id, self);
     setLoading(false);
   }
 
@@ -153,8 +170,18 @@ export default function ProfilePage() {
       <MetricCard label="Appraisals" value={metrics?.appraisals_completed} />
       <MetricCard label="Changes implemented" value={metrics?.changes_implemented} />
       <MetricCard label="Followers" value={metrics?.followers} />
-      <MetricCard label="Reviews published" value={metrics?.reviews_published} />
+      <MetricCard label="Published snapshots" value={metrics?.reviews_published} />
     </div>
+
+    {isSelf && <div className="card section-block">
+      <div className="section-heading"><div><div className="eyebrow"><Bookmark size={15} /> Private workspace</div><h2>Saved evidence</h2></div></div>
+      <p className="muted tiny">Saved items are private to you in this version. They are not displayed on other users' public profiles.</p>
+      <div className="three-column">
+        <div><h3>Papers</h3>{favorites.works.map(w => <div key={w.id} style={{ marginBottom: 10 }}><Link to={`/work/${w.id}`}>{w.title}</Link><div className="muted tiny">{w.publication_year || ''}{w.doi ? <> • <DoiLink doi={w.doi} /></> : null}</div></div>)}{!favorites.works.length && <div className="muted tiny">No saved papers.</div>}</div>
+        <div><h3>Living pages</h3>{favorites.live.map(v => <div key={v.id} style={{ marginBottom: 10 }}><Link to={`/live/${v.slug}`}>{v.title}</Link><div className="muted tiny">{v.visibility}</div></div>)}{!favorites.live.length && <div className="muted tiny">No saved living pages.</div>}</div>
+        <div><h3>Snapshots</h3>{favorites.reviews.map(r => <div key={r.id} style={{ marginBottom: 10 }}><Link to={`/review/${r.slug}`}>{r.title}</Link><div className="muted tiny">{r.status} • v{r.version_tag}</div></div>)}{!favorites.reviews.length && <div className="muted tiny">No saved snapshots.</div>}</div>
+      </div>
+    </div>}
 
     <div className="two-column"><section><div className="section-heading"><div><div className="eyebrow">Activity</div><h2>Recent additions</h2></div></div><ActivityList events={events} /></section><aside>
       <div className="card"><h2><Award size={19} /> Research identity</h2><div className="stack compact"><div><strong>{metrics?.verified_authorships || 0}</strong> verified paper claims</div><div><strong>{metrics?.challenges_accepted || 0}</strong> accepted evidence challenges</div><div><strong>{metrics?.papers_added || 0}</strong> papers added to the Commons</div></div></div>

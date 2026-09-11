@@ -7,6 +7,7 @@ import { cleanJatsText, formatDate } from '../lib/identifiers';
 import { appraisalComplete, calculateDomainMean, frameworkDomains, makeInitialResponses, scoreLabel, setDomainResponse } from '../lib/appraisal';
 import FacetPicker, { facetSummary, facetTypeLabel } from '../components/FacetPicker';
 import OutcomeConceptPicker, { outcomeTypeLabel } from '../components/OutcomeConceptPicker';
+import { FavoriteButton, ProfileLink } from '../components/Common';
 
 const num = v => v === '' || v == null ? null : Number(v);
 const emptyEvidence = { cohort_id: '', outcome_concept_id: '', outcome_label: '', outcome_type: 'proportion', timepoint_label: '', subgroup_label: '', units: '', mean: '', sd: '', n: '', events: '', total_exposure: '', reported_value: '', source_locator: '', extraction_notes: '' };
@@ -28,7 +29,7 @@ function ProposalList({ items = [], canResolve = false, onResolve }) {
   return <div className="subtle-callout" style={{ marginTop: 12 }}>
     <strong>Suggested edits</strong>
     {items.map(p => <div key={p.id} style={{ marginTop: 10 }}>
-      <div className="tiny"><strong>{p.creator?.display_name || p.creator?.username || 'Contributor'}</strong>: {p.rationale}</div>
+      <div className="tiny"><strong><ProfileLink profile={p.creator} /></strong>: {p.rationale}</div>
       <div className="muted tiny">{Object.entries(p.proposed_patch || {}).map(([k, v]) => `${k.replaceAll('_', ' ')} → ${v ?? 'blank'}`).join(' • ')}</div>
       {canResolve && <div className="row-actions" style={{ marginTop: 6 }}>
         <button type="button" className="button mini" onClick={() => onResolve(p, 'accepted')}>Accept</button>
@@ -64,6 +65,7 @@ export default function WorkPage() {
   const [cohortEdit, setCohortEdit] = useState({});
   const [editingSlotId, setEditingSlotId] = useState(null);
   const [slotEdit, setSlotEdit] = useState({});
+  const [consensusStatus, setConsensusStatus] = useState({});
   const [msg, setMsg] = useState('');
 
   const [cohortForm, setCohortForm] = useState(emptyCohort);
@@ -93,11 +95,12 @@ export default function WorkPage() {
     const cohortIds = (c.data || []).map(x => x.id);
     const slotIds = (s.data || []).map(x => x.id);
 
-    const [facetLinks, comps, e, v] = await Promise.all([
+    const [facetLinks, comps, e, v, consensus] = await Promise.all([
       cohortIds.length ? supabase.from('rse_cohort_concepts').select('cohort_id,concept:rse_concepts(id,canonical_label,concept_type,visibility,owner_org_id,parent_concept_id,created_by)').in('cohort_id', cohortIds) : Promise.resolve({ data: [] }),
       supabase.from('rse_comparisons').select('*').eq('work_id', id).order('created_at'),
       slotIds.length ? supabase.from('rse_extractions').select('*,creator:rse_profiles!created_by(username,display_name)').in('slot_id', slotIds).order('created_at') : Promise.resolve({ data: [] }),
       slotIds.length ? supabase.from('rse_extraction_votes').select('*').in('slot_id', slotIds) : Promise.resolve({ data: [] }),
+      slotIds.length ? supabase.from('rse_extraction_consensus_status').select('*').in('slot_id', slotIds) : Promise.resolve({ data: [] }),
     ]);
 
     const extractionIds = (e.data || []).map(x => x.id);
@@ -130,6 +133,7 @@ export default function WorkPage() {
     setSlots(s.data || []);
     setExtractions(e.data || []);
     setVotes(v.data || []);
+    setConsensusStatus(Object.fromEntries((consensus.data || []).map(x => [x.slot_id, x])));
     setAppraisals(ap.data || []);
     setFrameworks(f.data || []);
     setChallenges(ch.data || []);
@@ -610,6 +614,7 @@ export default function WorkPage() {
       </div>
       <div className="tag-row"><ScopeBadge visibility={work.visibility || (work.is_public ? 'public' : 'private')} orgName={workOrgName} />{claimStatus?.status === 'verified' && <span className="tag verified-tag">Verified author</span>}{claimStatus?.status === 'pending' && <span className="tag">Authorship claim pending</span>}</div>
     </div><div className="row-actions">
+      <FavoriteButton targetType="work" targetId={work.id} />
       {user && claimStatus?.status !== 'verified' && <button className="button secondary" onClick={claim}>Claim authorship</button>}
       {canEditWork && <button className="button secondary" onClick={() => setEditingWork(!editingWork)}><Edit3 size={15} /> Edit paper metadata</button>}
     </div></div>
@@ -695,7 +700,7 @@ export default function WorkPage() {
         return <div className="card evidence-slot" key={s.id}>
           <div className="slot-head">
             <div><h3>{conceptMap.get(s.outcome_concept_id)?.label || 'Outcome'}</h3><div className="muted">{cohort?.label} {s.timepoint_label && `• ${s.timepoint_label}`} {s.subgroup_label && `• legacy subgroup: ${s.subgroup_label}`} • {outcomeTypeLabel(s.outcome_type)}</div>{facets.length > 0 && <div className="muted tiny">{facetSummary(facets)}</div>}<div className="tag-row"><ScopeBadge visibility={cohort?.visibility || 'public'} orgName={orgMap.get(cohort?.owner_org_id)?.name} /></div></div>
-            <div className="row-actions"><span className="tag">{extractions.filter(x => x.slot_id === s.id).length} proposal(s)</span>{user && (canEditSlot(s) ? <button type="button" className="button mini ghost" onClick={() => startEditSlot(s)}><Edit3 size={13} /> Edit endpoint</button> : <button type="button" className="button mini ghost" onClick={() => proposeSlotEdit(s)}>Suggest endpoint edit</button>)}</div>
+            <div className="row-actions">{consensusStatus[s.id] && <span className="tag">{String(consensusStatus[s.id].consensus_status || '').replaceAll('_', ' ')}{consensusStatus[s.id].total_votes ? ` • ${consensusStatus[s.id].leader_votes}/${consensusStatus[s.id].total_votes} confirmations` : ''}</span>}<span className="tag">{extractions.filter(x => x.slot_id === s.id).length} proposal(s)</span>{user && (canEditSlot(s) ? <button type="button" className="button mini ghost" onClick={() => startEditSlot(s)}><Edit3 size={13} /> Edit endpoint</button> : <button type="button" className="button mini ghost" onClick={() => proposeSlotEdit(s)}>Suggest endpoint edit</button>)}</div>
           </div>
 
           {editingSlotId === s.id && canEditSlot(s) && <form className="form-grid" onSubmit={e => saveSlotEdit(e, s)} style={{ margin: '12px 0' }}>
@@ -718,7 +723,7 @@ export default function WorkPage() {
           <ProposalList items={proposalsFor('evidence_slot', s.id)} canResolve={canEditSlot(s)} onResolve={resolveEditProposal} />
 
           {extractions.filter(x => x.slot_id === s.id).map(x => <div key={x.id}>
-            <div className={`extraction-row ${myVote(s.id) === x.id ? 'selected' : ''}`}><div><strong>{s.outcome_type === 'continuous' ? `mean ${x.mean} (SD ${x.sd}), n=${x.n}` : s.outcome_type === 'rate' ? `${x.events} events / ${x.total_exposure} exposure` : `${x.events}/${x.n}`}</strong><div className="muted tiny">Source: {x.source_locator || 'not specified'} • Extracted by {x.creator?.display_name || x.creator?.username || 'contributor'} • {voteCount(x.id)} confirmations</div>{x.extraction_notes && <div className="tiny">{x.extraction_notes}</div>}</div><div className="row-actions">{user && <button className="button mini" onClick={() => vote(s.id, x.id)}><Vote size={14} /> {myVote(s.id) === x.id ? 'Confirmed' : 'Confirm'}</button>}{user && <button className="button mini ghost" onClick={() => challenge(x.id)}><Flag size={14} /> Challenge</button>}{user?.id === x.created_by ? <button className="button mini ghost" onClick={() => editExtraction(x)}>Edit values</button> : user && <button className="button mini ghost" onClick={() => proposeExtractionEdit(x)}>Suggest correction</button>}</div></div>
+            <div className={`extraction-row ${myVote(s.id) === x.id ? 'selected' : ''}`}><div><strong>{s.outcome_type === 'continuous' ? `mean ${x.mean} (SD ${x.sd}), n=${x.n}` : s.outcome_type === 'rate' ? `${x.events} events / ${x.total_exposure} exposure` : `${x.events}/${x.n}`}</strong><div className="muted tiny">Source: {x.source_locator || 'not specified'} • Extracted by <ProfileLink profile={x.creator} fallback="contributor" /> • {voteCount(x.id)} confirmations</div>{x.extraction_notes && <div className="tiny">{x.extraction_notes}</div>}</div><div className="row-actions">{user && <button className="button mini" onClick={() => vote(s.id, x.id)}><Vote size={14} /> {myVote(s.id) === x.id ? 'Confirmed' : 'Confirm'}</button>}{user && <button className="button mini ghost" onClick={() => challenge(x.id)}><Flag size={14} /> Challenge</button>}{user?.id === x.created_by ? <button className="button mini ghost" onClick={() => editExtraction(x)}>Edit values</button> : user && <button className="button mini ghost" onClick={() => proposeExtractionEdit(x)}>Suggest correction</button>}</div></div>
             <ProposalList items={proposalsFor('extraction', x.id)} canResolve={user?.id === x.created_by || canEditWork} onResolve={resolveEditProposal} />
           </div>)}
         </div>;

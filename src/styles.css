@@ -38,3 +38,21 @@
 .facet-search-input svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.55;pointer-events:none}
 .facet-search-input input{width:100%;min-width:0;padding-left:32px}
 @media(max-width:900px){.facet-picker-controls{grid-template-columns:1fr}}
+
+/* v3.0: saved evidence / evidence pages */
+.three-column {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.footer-brand img {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .three-column { grid-template-columns: 1fr; }
+}

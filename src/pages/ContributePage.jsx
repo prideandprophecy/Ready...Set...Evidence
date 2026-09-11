@@ -4,6 +4,7 @@ import { Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { RequireAuth } from '../components/Common';
 import { cleanJatsText, normalizeDoi } from '../lib/identifiers';
+import { DoiLink } from '../components/Common';
 import { supabase } from '../supabaseClient';
 
 const EMPTY = {
@@ -159,6 +160,6 @@ export default function ContributePage() {
     </form>
 
     {message && <div className="notice">{message}</div>}
-    {duplicates.length > 0 && <div className="card"><h2>Possible existing records</h2>{duplicates.map(d => <div className="duplicate-row" key={d.id}><div><strong>{d.title}</strong><div className="muted tiny">{d.publication_year || ''} {d.doi ? `• ${d.doi}` : ''} • Match: {d.match_reason}</div></div><button className="button secondary" onClick={() => navigate(`/work/${d.id}`)}>Open</button></div>)}</div>}
+    {duplicates.length > 0 && <div className="card"><h2>Possible existing records</h2>{duplicates.map(d => <div className="duplicate-row" key={d.id}><div><strong>{d.title}</strong><div className="muted tiny">{d.publication_year || ''} {d.doi ? <>• <DoiLink doi={d.doi} /></> : null} • Match: {d.match_reason}</div></div><button className="button secondary" onClick={() => navigate(`/work/${d.id}`)}>Open</button></div>)}</div>}
   </section>;
 }
