@@ -10,6 +10,13 @@ function cohortTypeArray(value) {
   return value ? [value] : null;
 }
 
+function outcomeTypeLabel(value) {
+  if (value === 'proportion') return 'Proportion';
+  if (value === 'rate') return 'Rate';
+  if (value === 'continuous') return 'Continuous';
+  return value || 'Outcome';
+}
+
 function groupTypeLabel(value) {
   if (value === 'overall') return 'Overall cohorts';
   if (value === 'arm') return 'Study arms';
@@ -34,7 +41,7 @@ function EvidenceTable({ rows, frameworkName }) {
       <td>{r.cohort_label}<div className="muted tiny">{groupTypeLabel(r.cohort_type)}</div></td>
       <td>{Array.isArray(r.facets) && r.facets.length ? <span className="tiny">{facetSummary(r.facets.map(x => ({ ...x, canonical_label: x.label || x.canonical_label })))}</span> : '—'}</td>
       <td>{r.evidence_visibility === 'organization' ? 'Organization' : r.evidence_visibility}</td>
-      <td>{r.outcome_label}</td>
+      <td>{r.outcome_label}<div className="muted tiny">{outcomeTypeLabel(r.outcome_type)}</div></td>
       <td>{r.timepoint_label || '—'}</td>
       <td>{Number.isFinite(Number(r.community_quality_score)) ? `${Number(r.community_quality_score).toFixed(2)} / 5 (n=${r.appraisal_count})` : 'Not appraised'}</td>
       <td>{r.vote_count}</td>
@@ -184,7 +191,7 @@ export default function SynthesizePage() {
 
     <div className="card form-stack">
       <div className="filter-grid">
-        <label>Outcome<select value={outcome} onChange={e => setOutcome(e.target.value)}><option value="">Select outcome</option>{concepts.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
+        <label>Outcome<select value={outcome} onChange={e => setOutcome(e.target.value)}><option value="">Select outcome</option>{concepts.map(c => <option key={c.id} value={c.id}>{c.label} • {outcomeTypeLabel(c.default_outcome_type)}</option>)}</select></label>
         <label>Evidence scope<select value={scope} onChange={e => { setScope(e.target.value); if (e.target.value !== 'organization') setOrgId(''); }}><option value="public">Public Commons</option>{user && <option value="organization">Public + organization evidence</option>}</select></label>
         {scope === 'organization' && <label>Organization<select value={orgId} onChange={e => setOrgId(e.target.value)}><option value="">Select organization</option>{orgs.map(o => <option value={o.id} key={o.id}>{o.name}</option>)}</select></label>}
         {user && <label className="checkbox"><input type="checkbox" checked={includePrivate} onChange={e => setIncludePrivate(e.target.checked)} /> Include my private evidence</label>}

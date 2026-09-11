@@ -3,12 +3,13 @@ import { Link, useParams } from 'react-router-dom';
 import { Check, Edit3, Flag, Plus, Trash2, Vote } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import { cleanJatsText, formatDate, slugify } from '../lib/identifiers';
+import { cleanJatsText, formatDate } from '../lib/identifiers';
 import { appraisalComplete, calculateDomainMean, frameworkDomains, makeInitialResponses, scoreLabel, setDomainResponse } from '../lib/appraisal';
 import FacetPicker, { facetSummary, facetTypeLabel } from '../components/FacetPicker';
+import OutcomeConceptPicker, { outcomeTypeLabel } from '../components/OutcomeConceptPicker';
 
 const num = v => v === '' || v == null ? null : Number(v);
-const emptyEvidence = { cohort_id: '', outcome_label: '', outcome_type: 'proportion', timepoint_label: '', subgroup_label: '', units: '', mean: '', sd: '', n: '', events: '', total_exposure: '', reported_value: '', source_locator: '', extraction_notes: '' };
+const emptyEvidence = { cohort_id: '', outcome_concept_id: '', outcome_label: '', outcome_type: 'proportion', timepoint_label: '', subgroup_label: '', units: '', mean: '', sd: '', n: '', events: '', total_exposure: '', reported_value: '', source_locator: '', extraction_notes: '' };
 const emptyCohort = { label: 'Overall cohort', description: '', cohort_type: 'overall', parent_cohort_id: '', sample_size: '', visibility: 'public', owner_org_id: '' };
 
 function ScopeBadge({ visibility, orgName }) {
@@ -362,10 +363,13 @@ export default function WorkPage() {
   }
 
   function startEditSlot(slot) {
+    const concept = conceptMap.get(slot.outcome_concept_id);
     setEditingSlotId(slot.id);
     setSlotEdit({
       cohort_id: slot.cohort_id || '',
-      outcome_type: slot.outcome_type || 'proportion',
+      outcome_concept_id: slot.outcome_concept_id || '',
+      outcome_label: concept?.label || '',
+      outcome_type: concept?.default_outcome_type || slot.outcome_type || 'proportion',
       timepoint_label: slot.timepoint_label || '',
       units: slot.units || '',
       notes: slot.notes || '',
@@ -376,9 +380,17 @@ export default function WorkPage() {
   async function saveSlotEdit(e, slot) {
     e.preventDefault();
     if (!canEditSlot(slot)) return;
+    let concept;
+    try {
+      concept = await resolveOutcomeConcept(slotEdit);
+    } catch (err) {
+      setMsg(err.message);
+      return;
+    }
     const { error } = await supabase.from('rse_evidence_slots').update({
       cohort_id: slotEdit.cohort_id,
-      outcome_type: slotEdit.outcome_type,
+      outcome_concept_id: concept.id,
+      outcome_type: concept.default_outcome_type,
       timepoint_label: slotEdit.timepoint_label || '',
       units: slotEdit.units || null,
       notes: slotEdit.notes || null,
@@ -455,12 +467,31 @@ export default function WorkPage() {
     if (!error) await load();
   }
 
-  async function findOrCreateOutcomeConcept(label, type) {
-    const existing = concepts.find(x => x.label.toLowerCase() === label.toLowerCase());
-    if (existing) return existing;
-    const { data, error } = await supabase.from('rse_outcome_concepts').insert({ label, slug: `${slugify(label)}-${Math.random().toString(36).slice(2, 6)}`, default_outcome_type: type, created_by: user.id }).select().single();
+  async function resolveOutcomeConcept(input) {
+    const label = String(input?.outcome_label || '').trim();
+    const requestedType = input?.outcome_type || 'proportion';
+    const selectedId = input?.outcome_concept_id || '';
+
+    if (!label) throw new Error('Choose or create an outcome concept.');
+
+    if (selectedId) {
+      const existing = concepts.find(x => x.id === selectedId);
+      if (existing) {
+        if (existing.default_outcome_type !== requestedType) {
+          throw new Error(`${existing.label} is defined as ${outcomeTypeLabel(existing.default_outcome_type)}, not ${outcomeTypeLabel(requestedType)}.`);
+        }
+        return existing;
+      }
+    }
+
+    const { data, error } = await supabase.rpc('rse_get_or_create_outcome_concept', {
+      p_label: label,
+      p_type: requestedType,
+    });
     if (error) throw error;
-    return data;
+    const concept = Array.isArray(data) ? data[0] : data;
+    if (!concept?.id) throw new Error('Unable to resolve the outcome concept.');
+    return concept;
   }
 
   async function addExtraction(e) {
@@ -470,16 +501,16 @@ export default function WorkPage() {
     try {
       const cohort = cohorts.find(c => c.id === ev.cohort_id);
       if (!cohort) throw new Error('Choose a study group first.');
-      const concept = await findOrCreateOutcomeConcept(ev.outcome_label.trim(), ev.outcome_type);
+      const concept = await resolveOutcomeConcept(ev);
       let { data: slot } = await supabase.from('rse_evidence_slots').select('*')
-        .eq('work_id', id).eq('cohort_id', ev.cohort_id).eq('outcome_concept_id', concept.id).eq('outcome_type', ev.outcome_type)
+        .eq('work_id', id).eq('cohort_id', ev.cohort_id).eq('outcome_concept_id', concept.id).eq('outcome_type', concept.default_outcome_type)
         .ilike('timepoint_label', ev.timepoint_label || '').ilike('subgroup_label', ev.subgroup_label || '').maybeSingle();
       if (!slot) {
         const r = await supabase.from('rse_evidence_slots').insert({
           work_id: id,
           cohort_id: ev.cohort_id,
           outcome_concept_id: concept.id,
-          outcome_type: ev.outcome_type,
+          outcome_type: concept.default_outcome_type,
           timepoint_label: ev.timepoint_label || '',
           subgroup_label: '',
           units: ev.units || null,
@@ -663,13 +694,20 @@ export default function WorkPage() {
         const facets = cohortFacets[s.cohort_id] || [];
         return <div className="card evidence-slot" key={s.id}>
           <div className="slot-head">
-            <div><h3>{conceptMap.get(s.outcome_concept_id)?.label || 'Outcome'}</h3><div className="muted">{cohort?.label} {s.timepoint_label && `• ${s.timepoint_label}`} {s.subgroup_label && `• legacy subgroup: ${s.subgroup_label}`} • {s.outcome_type}</div>{facets.length > 0 && <div className="muted tiny">{facetSummary(facets)}</div>}<div className="tag-row"><ScopeBadge visibility={cohort?.visibility || 'public'} orgName={orgMap.get(cohort?.owner_org_id)?.name} /></div></div>
+            <div><h3>{conceptMap.get(s.outcome_concept_id)?.label || 'Outcome'}</h3><div className="muted">{cohort?.label} {s.timepoint_label && `• ${s.timepoint_label}`} {s.subgroup_label && `• legacy subgroup: ${s.subgroup_label}`} • {outcomeTypeLabel(s.outcome_type)}</div>{facets.length > 0 && <div className="muted tiny">{facetSummary(facets)}</div>}<div className="tag-row"><ScopeBadge visibility={cohort?.visibility || 'public'} orgName={orgMap.get(cohort?.owner_org_id)?.name} /></div></div>
             <div className="row-actions"><span className="tag">{extractions.filter(x => x.slot_id === s.id).length} proposal(s)</span>{user && (canEditSlot(s) ? <button type="button" className="button mini ghost" onClick={() => startEditSlot(s)}><Edit3 size={13} /> Edit endpoint</button> : <button type="button" className="button mini ghost" onClick={() => proposeSlotEdit(s)}>Suggest endpoint edit</button>)}</div>
           </div>
 
           {editingSlotId === s.id && canEditSlot(s) && <form className="form-grid" onSubmit={e => saveSlotEdit(e, s)} style={{ margin: '12px 0' }}>
             <label>Study group<select value={slotEdit.cohort_id || ''} onChange={e => setSlotEdit({ ...slotEdit, cohort_id: e.target.value })}>{cohorts.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
-            <label>Outcome type<select value={slotEdit.outcome_type || 'proportion'} onChange={e => setSlotEdit({ ...slotEdit, outcome_type: e.target.value })}><option value="proportion">Proportion</option><option value="rate">Rate</option><option value="continuous">Continuous</option></select></label>
+            <OutcomeConceptPicker
+              conceptId={slotEdit.outcome_concept_id || ''}
+              label={slotEdit.outcome_label || ''}
+              outcomeType={slotEdit.outcome_type || 'proportion'}
+              onChange={patch => setSlotEdit({ ...slotEdit, ...patch })}
+              title="Canonical outcome"
+              help="Changing an endpoint's outcome concept also determines its outcome type. A canonical outcome cannot be reused under a different type."
+            />
             <label>Timepoint<input value={slotEdit.timepoint_label || ''} onChange={e => setSlotEdit({ ...slotEdit, timepoint_label: e.target.value })} /></label>
             <label>Units<input value={slotEdit.units || ''} onChange={e => setSlotEdit({ ...slotEdit, units: e.target.value })} /></label>
             <label className="span2">Endpoint notes<textarea rows="2" value={slotEdit.notes || ''} onChange={e => setSlotEdit({ ...slotEdit, notes: e.target.value })} /></label>
@@ -732,9 +770,16 @@ export default function WorkPage() {
         <form className="card form-stack" onSubmit={addExtraction}><h2>Extract endpoint</h2>
           <label>Study group<select required value={ev.cohort_id} onChange={e => setEv({ ...ev, cohort_id: e.target.value })}><option value="">Select</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label} [{c.cohort_type || 'overall'} • {c.visibility || 'public'}]</option>)}</select></label>
           <p className="muted tiny">Population/subgroup information belongs on the selected study group as structured facets. The extraction inherits that group's access scope.</p>
-          <label>Outcome concept<input required list="outcomes" value={ev.outcome_label} onChange={e => setEv({ ...ev, outcome_label: e.target.value })} /><datalist id="outcomes">{concepts.map(o => <option value={o.label} key={o.id} />)}</datalist></label>
-          <label>Type<select value={ev.outcome_type} onChange={e => setEv({ ...ev, outcome_type: e.target.value })}><option value="proportion">Proportion</option><option value="rate">Rate</option><option value="continuous">Continuous</option></select></label>
+          <OutcomeConceptPicker
+            conceptId={ev.outcome_concept_id}
+            label={ev.outcome_label}
+            outcomeType={ev.outcome_type}
+            onChange={patch => setEv({ ...ev, ...patch })}
+            title="Outcome concept"
+            help="Search before creating a new outcome. Each canonical outcome belongs to exactly one outcome type. For example, if CRBSI is already a proportion, a rate must use a distinct name such as CRBSI Rate."
+          />
           <label>Timepoint<input value={ev.timepoint_label} onChange={e => setEv({ ...ev, timepoint_label: e.target.value })} placeholder="e.g., 90 days" /></label>
+          <label>Units, optional<input value={ev.units} onChange={e => setEv({ ...ev, units: e.target.value })} placeholder={ev.outcome_type === 'rate' ? 'e.g., catheter-days' : ev.outcome_type === 'continuous' ? 'e.g., mmHg, days' : 'Usually blank for proportions'} /></label>
           {ev.outcome_type === 'continuous' ? <><label>Mean<input value={ev.mean} onChange={e => setEv({ ...ev, mean: e.target.value })} /></label><label>SD<input value={ev.sd} onChange={e => setEv({ ...ev, sd: e.target.value })} /></label><label>N<input value={ev.n} onChange={e => setEv({ ...ev, n: e.target.value })} /></label></> : ev.outcome_type === 'rate' ? <><label>Events<input value={ev.events} onChange={e => setEv({ ...ev, events: e.target.value })} /></label><label>Total exposure<input value={ev.total_exposure} onChange={e => setEv({ ...ev, total_exposure: e.target.value })} /></label></> : <><label>Events<input value={ev.events} onChange={e => setEv({ ...ev, events: e.target.value })} /></label><label>N<input value={ev.n} onChange={e => setEv({ ...ev, n: e.target.value })} /></label></>}
           <label>Source location<input value={ev.source_locator} onChange={e => setEv({ ...ev, source_locator: e.target.value })} placeholder="Table 2, p. 7" /></label>
           <label>Notes<textarea rows="3" value={ev.extraction_notes} onChange={e => setEv({ ...ev, extraction_notes: e.target.value })} /></label>
