@@ -5,6 +5,8 @@ import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import { ActivityList, DoiLink, MetricCard } from '../components/Common';
 import AuthorshipClaimsPanel from '../components/AuthorshipClaimsPanel';
+import NotificationPreferencesForm from '../components/NotificationPreferencesForm';
+import AccountSecurityPanel from '../components/AccountSecurityPanel';
 import { compactNumber, normalizeUsername, normalizeWebsiteUrl, usernameIsValid } from '../lib/identifiers';
 
 export default function ProfilePage() {
@@ -173,6 +175,8 @@ export default function ProfilePage() {
     {msg && <div className="notice">{msg}</div>}
 
     {(isSelf || isPlatformAdmin) && <AuthorshipClaimsPanel targetProfile={p} isSelf={isSelf} isPlatformAdmin={isPlatformAdmin} />}
+
+    {isSelf && <div className="two-column section-block"><section><NotificationPreferencesForm /></section><aside><AccountSecurityPanel /></aside></div>}
 
     <div className="metric-grid">
       <MetricCard label="Contribution points" value={compactNumber(metrics?.points)} detail="Activity-based" />

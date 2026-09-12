@@ -16,12 +16,14 @@ import OrganizationsPage from './pages/OrganizationsPage';
 import OrganizationPage from './pages/OrganizationPage';
 import NotificationsPage from './pages/NotificationsPage';
 import OrcidCallbackPage from './pages/OrcidCallbackPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 
 export default function App() {
   return <AuthProvider><BrowserRouter><Routes><Route element={<Layout />}>
     <Route path="/" element={<ExplorePage />} />
     <Route path="/evidence" element={<EvidencePage />} />
     <Route path="/auth" element={<AuthPage />} />
+    <Route path="/reset-password" element={<ResetPasswordPage />} />
     <Route path="/u/:username" element={<ProfilePage />} />
     <Route path="/contribute" element={<ContributePage />} />
     <Route path="/work/:id" element={<WorkPage />} />

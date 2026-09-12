@@ -21,7 +21,7 @@ export default function Layout() {
     let cancelled = false;
     async function loadUnread() {
       if (!user?.id) { setUnread(0); return; }
-      const { count } = await supabase.from('rse_notifications').select('id', { count: 'exact', head: true }).eq('user_id', user.id).is('read_at', null);
+      const { count } = await supabase.from('rse_notifications').select('id', { count: 'exact', head: true }).eq('user_id', user.id).eq('show_in_app', true).is('read_at', null);
       if (!cancelled) setUnread(count || 0);
     }
     loadUnread();

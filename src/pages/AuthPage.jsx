@@ -39,6 +39,15 @@ export default function AuthPage() {
     setBusy(true);
     setMessage('');
 
+    if (mode === 'forgot') {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      setMessage(error ? error.message : 'If an account exists for that email address, a password-reset link has been sent.');
+      setBusy(false);
+      return;
+    }
+
     if (mode === 'signup') {
       const normalized = normalizeUsername(username);
       const available = await checkHandle(normalized);
@@ -47,25 +56,38 @@ export default function AuthPage() {
         return;
       }
       const { error } = await supabase.auth.signUp({
-        email,
+        email: email.trim(),
         password,
         options: { data: { display_name: displayName.trim(), username: normalized } },
       });
       setMessage(error ? error.message : 'Account created. If email confirmation is enabled, check your email before signing in.');
     } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) setMessage(error.message);
     }
     setBusy(false);
   }
+
+  function switchMode(next) {
+    setMode(next);
+    setMessage('');
+    setHandleStatus('');
+  }
+
+  const title = mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create your RSE profile' : 'Reset your password';
 
   return (
     <div className="auth-shell">
       <div className="card auth-card">
         <img className="auth-logo" src={BRAND.logoUrl} alt={BRAND.name} />
         <div className="eyebrow">Contributor identity</div>
-        <h1>{mode === 'signin' ? 'Sign in' : 'Create your RSE profile'}</h1>
-        <p className="muted">Your public profile links your evidence contributions, appraisals, reviews, verified papers, organizations, followers, and contribution metrics.</p>
+        <h1>{title}</h1>
+        <p className="muted">
+          {mode === 'forgot'
+            ? 'Enter your account email and RSE will send a secure password-reset link.'
+            : 'Your public profile links your evidence contributions, appraisals, Evidence Pages, verified papers, organizations, followers, and contribution metrics.'}
+        </p>
+
         <form className="form-stack" onSubmit={submit}>
           {mode === 'signup' && <>
             <label>Display name<input required value={displayName} onChange={e => setDisplayName(e.target.value)} /></label>
@@ -74,12 +96,25 @@ export default function AuthPage() {
               {handleStatus && <span className={`tiny ${handleStatus === 'Available' ? 'success-text' : 'muted'}`}>{handleStatus}</span>}
             </label>
           </>}
-          <label>Email<input type="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
-          <label>Password<input type="password" minLength="8" required value={password} onChange={e => setPassword(e.target.value)} /></label>
-          <button disabled={busy} className="button primary">{busy ? 'Working…' : mode === 'signin' ? 'Sign in' : 'Create profile'}</button>
+
+          <label>Email<input type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
+          {mode !== 'forgot' && <label>Password<input type="password" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} minLength="8" required value={password} onChange={e => setPassword(e.target.value)} /></label>}
+
+          <button disabled={busy} className="button primary">
+            {busy ? 'Working…' : mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create profile' : 'Send reset link'}
+          </button>
         </form>
+
         {message && <div className="notice">{message}</div>}
-        <button className="button text" onClick={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setMessage(''); }}>{mode === 'signin' ? 'Need a profile? Create one' : 'Already have a profile? Sign in'}</button>
+
+        <div className="stack compact">
+          {mode === 'signin' && <>
+            <button className="button text" type="button" onClick={() => switchMode('forgot')}>Forgot password?</button>
+            <button className="button text" type="button" onClick={() => switchMode('signup')}>Need a profile? Create one</button>
+          </>}
+          {mode === 'signup' && <button className="button text" type="button" onClick={() => switchMode('signin')}>Already have a profile? Sign in</button>}
+          {mode === 'forgot' && <button className="button text" type="button" onClick={() => switchMode('signin')}>Return to sign in</button>}
+        </div>
       </div>
     </div>
   );
