@@ -42,7 +42,7 @@ function ProposalList({ items = [], canResolve = false, onResolve }) {
 
 export default function WorkPage() {
   const { id } = useParams();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [work, setWork] = useState(null);
   const [authors, setAuthors] = useState([]);
   const [cohorts, setCohorts] = useState([]);
@@ -618,10 +618,11 @@ export default function WorkPage() {
         {work.doi && work.pmid && <span>•</span>}
         {work.pmid && <span>PMID {work.pmid}</span>}
       </div>
-      <div className="tag-row"><ScopeBadge visibility={work.visibility || (work.is_public ? 'public' : 'private')} orgName={workOrgName} />{claimStatus?.status === 'verified' && <span className="tag verified-tag">Verified author</span>}{claimStatus?.status === 'pending' && <span className="tag">Authorship claim pending</span>}</div>
+      <div className="tag-row"><ScopeBadge visibility={work.visibility || (work.is_public ? 'public' : 'private')} orgName={workOrgName} />{claimStatus?.status === 'verified' && <span className="tag verified-tag">Verified author</span>}{claimStatus?.status === 'pending' && <span className="tag">Authorship verification pending</span>}{claimStatus?.status === 'rejected' && <span className="tag">Authorship not verified</span>}</div>
     </div><div className="row-actions">
       <FavoriteButton targetType="work" targetId={work.id} />
-      {user && claimStatus?.status !== 'verified' && <button className="button secondary" onClick={claim}>Claim authorship</button>}
+      {user && claimStatus?.status !== 'verified' && <button className="button secondary" onClick={claim}>{claimStatus?.status === 'pending' ? 'Recheck authorship with ORCID' : 'Claim authorship'}</button>}
+      {user && claimStatus?.status && claimStatus?.status !== 'verified' && profile?.username && <Link className="button ghost" to={`/u/${profile.username}`}>Manage claim</Link>}
       {canEditWork && <button className="button secondary" onClick={() => setEditingWork(!editingWork)}><Edit3 size={15} /> Edit paper metadata</button>}
     </div></div>
 
