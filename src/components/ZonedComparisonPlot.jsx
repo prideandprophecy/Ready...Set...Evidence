@@ -49,8 +49,8 @@ function downloadSvg(id, fileName) {
 export default function ZonedComparisonPlot({
   modelA,
   modelB,
-  labelA = 'Evidence set A',
-  labelB = 'Evidence set B',
+  labelA = 'Primary evidence',
+  labelB = 'Comparator evidence',
   direction,
   rateScale = 'per_1000_days',
   proportionAsPercent = true,

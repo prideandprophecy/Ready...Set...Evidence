@@ -8,10 +8,11 @@ import { appraisalComplete, calculateDomainMean, frameworkDomains, makeInitialRe
 import FacetPicker, { facetSummary, facetTypeLabel } from '../components/FacetPicker';
 import OutcomeConceptPicker, { outcomeTypeLabel } from '../components/OutcomeConceptPicker';
 import { FavoriteButton, ProfileLink } from '../components/Common';
+import { STUDY_DESIGN_OPTIONS, studyDesignLabel } from '../lib/studyDesigns';
 
 const num = v => v === '' || v == null ? null : Number(v);
 const emptyEvidence = { cohort_id: '', outcome_concept_id: '', outcome_label: '', outcome_type: 'proportion', timepoint_label: '', subgroup_label: '', units: '', mean: '', sd: '', n: '', events: '', total_exposure: '', reported_value: '', source_locator: '', extraction_notes: '' };
-const emptyCohort = { label: 'Overall cohort', description: '', cohort_type: 'overall', parent_cohort_id: '', sample_size: '', visibility: 'public', owner_org_id: '' };
+const emptyCohort = { label: 'Overall cohort', description: '', cohort_type: 'overall', parent_cohort_id: '', sample_size: '', is_mixed: false, visibility: 'public', owner_org_id: '' };
 
 function ScopeBadge({ visibility, orgName }) {
   if (visibility === 'organization') return <span className="tag private-tag">Organization: {orgName || 'members'}</span>;
@@ -151,6 +152,7 @@ export default function WorkPage() {
         publication_year: w.data.publication_year || '',
         url: w.data.url || '',
         citation: w.data.citation || '',
+        study_design: w.data.study_design || '',
         change_reason: '',
       });
     }
@@ -233,7 +235,7 @@ export default function WorkPage() {
     e.preventDefault();
     if (!canEditWork) return;
     const reason = workForm.change_reason.trim() || 'Metadata correction';
-    const { error } = await supabase.rpc('rse_update_work_metadata', {
+    const { error } = await supabase.rpc('rse_update_work_metadata_v2', {
       p_work_id: id,
       p_title: workForm.title.trim(),
       p_abstract: cleanJatsText(workForm.abstract) || null,
@@ -241,6 +243,7 @@ export default function WorkPage() {
       p_publication_year: workForm.publication_year ? Number(workForm.publication_year) : null,
       p_url: workForm.url || null,
       p_citation: workForm.citation || null,
+      p_study_design: workForm.study_design || null,
       p_change_reason: reason,
     });
     setMsg(error ? error.message : 'Paper metadata updated and recorded in the audit history.');
@@ -257,6 +260,7 @@ export default function WorkPage() {
       cohort_type: cohortForm.cohort_type,
       parent_cohort_id: cohortForm.parent_cohort_id || null,
       sample_size: num(cohortForm.sample_size),
+      is_mixed: Boolean(cohortForm.is_mixed),
       visibility: cohortForm.visibility,
       owner_org_id: cohortForm.visibility === 'organization' ? cohortForm.owner_org_id : null,
       work_id: id,
@@ -308,6 +312,7 @@ export default function WorkPage() {
       cohort_type: cohort.cohort_type || 'overall',
       parent_cohort_id: cohort.parent_cohort_id || '',
       sample_size: cohort.sample_size ?? '',
+      is_mixed: Boolean(cohort.is_mixed),
       visibility: cohort.visibility || 'public',
       owner_org_id: cohort.owner_org_id || '',
       change_reason: '',
@@ -323,6 +328,7 @@ export default function WorkPage() {
       cohort_type: cohortEdit.cohort_type,
       parent_cohort_id: cohortEdit.cohort_type === 'overall' ? null : (cohortEdit.parent_cohort_id || null),
       sample_size: num(cohortEdit.sample_size),
+      is_mixed: Boolean(cohortEdit.is_mixed),
       visibility: cohortEdit.visibility,
       owner_org_id: cohortEdit.visibility === 'organization' ? (cohortEdit.owner_org_id || null) : null,
       last_change_reason: cohortEdit.change_reason.trim() || 'Study-group correction',
@@ -603,7 +609,7 @@ export default function WorkPage() {
 
   return <section>
     <div className="page-title"><div>
-      <div className="eyebrow">{work.work_type?.replaceAll('_', ' ')} {work.publication_year ? `• ${work.publication_year}` : ''}</div>
+      <div className="eyebrow">{work.work_type?.replaceAll('_', ' ')} {work.study_design ? `• ${studyDesignLabel(work.study_design)}` : ''} {work.publication_year ? `• ${work.publication_year}` : ''}</div>
       <h1>{work.title}</h1>
       <div className="muted" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
         {work.journal && <span>{work.journal}</span>}
@@ -626,6 +632,7 @@ export default function WorkPage() {
       <label className="span2">Title<input required value={workForm.title || ''} onChange={e => setWorkForm({ ...workForm, title: e.target.value })} /></label>
       <label>Journal<input value={workForm.journal || ''} onChange={e => setWorkForm({ ...workForm, journal: e.target.value })} /></label>
       <label>Publication year<input value={workForm.publication_year || ''} onChange={e => setWorkForm({ ...workForm, publication_year: e.target.value })} inputMode="numeric" /></label>
+      <label>Study design<select value={workForm.study_design || ''} onChange={e => setWorkForm({ ...workForm, study_design: e.target.value })}><option value="">Not classified</option>{STUDY_DESIGN_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label className="span2">URL<input value={workForm.url || ''} onChange={e => setWorkForm({ ...workForm, url: e.target.value })} /></label>
       <label className="span2">Citation<input value={workForm.citation || ''} onChange={e => setWorkForm({ ...workForm, citation: e.target.value })} /></label>
       <label className="span2">Abstract<textarea rows="10" value={workForm.abstract || ''} onChange={e => setWorkForm({ ...workForm, abstract: e.target.value })} /></label>
@@ -644,7 +651,7 @@ export default function WorkPage() {
           const facets = cohortFacets[c.id] || [];
           return <div className="card" key={c.id} style={{ margin: 0 }}>
             <div className="slot-head">
-              <div><h3>{c.label}</h3><div className="tag-row"><GroupTypeBadge type={c.cohort_type} /><ScopeBadge visibility={c.visibility || 'public'} orgName={orgMap.get(c.owner_org_id)?.name} /></div></div>
+              <div><h3>{c.label}</h3><div className="tag-row"><GroupTypeBadge type={c.cohort_type} />{c.is_mixed && <span className="tag">Mixed cohort</span>}<ScopeBadge visibility={c.visibility || 'public'} orgName={orgMap.get(c.owner_org_id)?.name} /></div></div>
               <div className="row-actions">
                 {c.sample_size != null && <span className="tag">n={c.sample_size}</span>}
                 {user && (canEditGroup(c)
@@ -662,6 +669,7 @@ export default function WorkPage() {
               <label className="span2">Label<input required value={cohortEdit.label || ''} onChange={e => setCohortEdit({ ...cohortEdit, label: e.target.value })} /></label>
               <label className="span2">Description / notes<textarea rows="3" value={cohortEdit.description || ''} onChange={e => setCohortEdit({ ...cohortEdit, description: e.target.value })} /></label>
               <label>Sample size<input value={cohortEdit.sample_size ?? ''} onChange={e => setCohortEdit({ ...cohortEdit, sample_size: e.target.value })} /></label>
+              <label className="checkbox"><input type="checkbox" checked={Boolean(cohortEdit.is_mixed)} onChange={e => setCohortEdit({ ...cohortEdit, is_mixed: e.target.checked })} /> Mixed cohort</label>
               <label>Evidence access<select value={cohortEdit.visibility || 'public'} onChange={e => setCohortEdit({ ...cohortEdit, visibility: e.target.value, owner_org_id: e.target.value === 'organization' ? cohortEdit.owner_org_id : '' })}><option value="public">Public Commons</option><option value="private">Private to me</option><option value="organization">Organization only</option></select></label>
               {cohortEdit.visibility === 'organization' && <label className="span2">Organization<select required value={cohortEdit.owner_org_id || ''} onChange={e => setCohortEdit({ ...cohortEdit, owner_org_id: e.target.value })}><option value="">Select</option>{orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>}
               <label className="span2">Reason for change<input required value={cohortEdit.change_reason || ''} onChange={e => setCohortEdit({ ...cohortEdit, change_reason: e.target.value })} placeholder="What changed and why?" /></label>
@@ -742,6 +750,8 @@ export default function WorkPage() {
           <label>Label<input required value={cohortForm.label} onChange={e => setCohortForm({ ...cohortForm, label: e.target.value })} placeholder="e.g., Treatment arm A, Pediatric subgroup" /></label>
           <label>Description / notes<textarea rows="3" value={cohortForm.description} onChange={e => setCohortForm({ ...cohortForm, description: e.target.value })} placeholder="Narrative details that do not need to be synthesis filters" /></label>
           <label>Sample size<input value={cohortForm.sample_size} onChange={e => setCohortForm({ ...cohortForm, sample_size: e.target.value })} /></label>
+          <label className="checkbox"><input type="checkbox" checked={Boolean(cohortForm.is_mixed)} onChange={e => setCohortForm({ ...cohortForm, is_mixed: e.target.checked })} /> Mixed cohort</label>
+          <div className="muted tiny">Use Mixed cohort when the reported group combines materially different populations, devices, treatments, or other strata that cannot be separated for this endpoint. Synthesis can include, exclude, or isolate mixed cohorts.</div>
 
           <div className="subtle-callout">
             <strong>Structured cohort facets</strong>
@@ -773,7 +783,7 @@ export default function WorkPage() {
         </form>}
 
         <form className="card form-stack" onSubmit={addExtraction}><h2>Extract endpoint</h2>
-          <label>Study group<select required value={ev.cohort_id} onChange={e => setEv({ ...ev, cohort_id: e.target.value })}><option value="">Select</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label} [{c.cohort_type || 'overall'} • {c.visibility || 'public'}]</option>)}</select></label>
+          <label>Study group<select required value={ev.cohort_id} onChange={e => setEv({ ...ev, cohort_id: e.target.value })}><option value="">Select</option>{cohorts.map(c => <option value={c.id} key={c.id}>{c.label} [{c.cohort_type || 'overall'}{c.is_mixed ? ' • mixed' : ''} • {c.visibility || 'public'}]</option>)}</select></label>
           <p className="muted tiny">Population/subgroup information belongs on the selected study group as structured facets. The extraction inherits that group's access scope.</p>
           <OutcomeConceptPicker
             conceptId={ev.outcome_concept_id}

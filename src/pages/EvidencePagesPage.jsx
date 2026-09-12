@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { FileCheck2, RadioTower } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import { ProfileLink, ScopeTag } from '../components/Common';
+import { MetricCard, ProfileLink, ScopeTag } from '../components/Common';
 import { formatDate } from '../lib/identifiers';
 
 export default function EvidencePagesPage() {
@@ -48,6 +48,13 @@ export default function EvidencePagesPage() {
       <Link className="button primary" to="/synthesize">Create from synthesis</Link>
     </div>
 
+    <div className="metric-grid">
+      <MetricCard label="Living pages" value={living.length} detail="Visible to you" />
+      <MetricCard label="Frozen snapshots" value={snapshots.filter(x => x.status === 'published').length} detail="Visible to you" />
+      {user && <MetricCard label="My living pages" value={living.filter(x => x.owner_user_id === user.id).length} />}
+      {user && <MetricCard label="My snapshots" value={snapshots.filter(x => x.owner_user_id === user.id && x.status === 'published').length} />}
+    </div>
+
     <div className="filter-bar">
       <button className={`button ${mode === 'all' ? 'primary' : 'ghost'}`} onClick={() => setMode('all')}>All</button>
       <button className={`button ${mode === 'living' ? 'primary' : 'ghost'}`} onClick={() => setMode('living')}>Living</button>
@@ -57,12 +64,12 @@ export default function EvidencePagesPage() {
 
     {loading ? <div className="card">Loading…</div> : <div className="card-grid">
       {items.map(item => item.pageKind === 'living' ? <article className="card link-card" key={`live-${item.id}`}>
-        <div className="work-card-top"><div className="eyebrow"><RadioTower size={14} /> Living evidence</div><ScopeTag visibility={item.visibility || 'public'} /></div>
+        <div className="work-card-top"><div className="eyebrow"><RadioTower size={14} /> Living evidence</div><div className="row-actions"><ScopeTag visibility={item.visibility || 'public'} />{user?.id === item.owner_user_id && <Link className="button mini ghost" to={`/live/${item.slug}/edit`}>Edit</Link>}</div></div>
         <h3><Link to={`/live/${item.slug}`}>{item.title}</Link></h3>
         <p>{item.description || 'A synthesis that recalculates from current consensus evidence.'}</p>
         <div className="muted tiny">Updated {formatDate(item.updated_at)} • {item.weighting?.toUpperCase()} • by <ProfileLink profile={item.owner} /></div>
       </article> : <article className="card link-card" key={`review-${item.id}`}>
-        <div className="work-card-top"><div className="eyebrow"><FileCheck2 size={14} /> {item.status === 'published' ? 'Frozen snapshot' : 'Review workspace'}</div><ScopeTag visibility={item.visibility || 'private'} /></div>
+        <div className="work-card-top"><div className="eyebrow"><FileCheck2 size={14} /> {item.status === 'published' ? 'Frozen snapshot' : 'Draft evidence workspace'}</div><div className="row-actions"><ScopeTag visibility={item.visibility || 'private'} />{user?.id === item.owner_user_id && <Link className="button mini ghost" to={`/review/${item.slug}/edit`}>Edit</Link>}</div></div>
         <h3><Link to={`/review/${item.slug}`}>{item.title}</Link></h3>
         <p>{item.research_question || item.abstract || 'A reproducible review workspace built from Commons evidence.'}</p>
         <div className="muted tiny">{item.status} • v{item.version_tag || '0.1'} • {item.published_at ? `published ${formatDate(item.published_at)}` : `updated ${formatDate(item.updated_at)}`} • by <ProfileLink profile={item.owner} /></div>

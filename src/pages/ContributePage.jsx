@@ -6,10 +6,11 @@ import { RequireAuth } from '../components/Common';
 import { cleanJatsText, normalizeDoi } from '../lib/identifiers';
 import { DoiLink } from '../components/Common';
 import { supabase } from '../supabaseClient';
+import { STUDY_DESIGN_OPTIONS, WORK_TYPE_OPTIONS } from '../lib/studyDesigns';
 
 const EMPTY = {
   doi: '', pmid: '', title: '', abstract: '', journal: '', publication_year: '',
-  work_type: 'journal_article', url: '', citation: '', metadata_source: 'manual',
+  work_type: 'journal_article', study_design: '', url: '', citation: '', metadata_source: 'manual',
   metadata_verified: false, authors: [], visibility: 'public', owner_org_id: '',
 };
 
@@ -95,6 +96,7 @@ export default function ContributePage() {
       journal: form.journal || null,
       publication_year: form.publication_year ? Number(form.publication_year) : null,
       work_type: form.work_type || 'journal_article',
+      study_design: form.study_design || null,
       url: form.url || null,
       citation: form.citation || null,
       metadata_source: form.metadata_source || 'manual',
@@ -151,7 +153,8 @@ export default function ContributePage() {
       <label className="span2">Title<input required value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /></label>
       <label>Journal<input value={form.journal} onChange={e => setForm({ ...form, journal: e.target.value })} /></label>
       <label>Publication year<input inputMode="numeric" value={form.publication_year} onChange={e => setForm({ ...form, publication_year: e.target.value })} /></label>
-      <label>Type<select value={form.work_type} onChange={e => setForm({ ...form, work_type: e.target.value })}><option value="journal_article">Journal article</option><option value="conference_abstract">Conference abstract</option><option value="systematic_review">Systematic review</option><option value="registry">Registry/public dataset</option><option value="internal_evidence">Internal/organization evidence</option><option value="other">Other</option></select></label>
+      <label>Source type<select value={form.work_type} onChange={e => setForm({ ...form, work_type: e.target.value })}>{WORK_TYPE_OPTIONS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      <label>Study design<select value={form.study_design || ''} onChange={e => setForm({ ...form, study_design: e.target.value })}><option value="">Not classified</option>{STUDY_DESIGN_OPTIONS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><span className="tiny muted">Classify the study design when known so synthesis can restrict evidence by design, such as randomized controlled trials only.</span></label>
       <label>URL<input value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} /></label>
       <label className="span2">Citation<input value={form.citation} onChange={e => setForm({ ...form, citation: e.target.value })} /></label>
       <label className="span2">Abstract<textarea rows="7" value={form.abstract} onChange={e => setForm({ ...form, abstract: e.target.value })} /></label>

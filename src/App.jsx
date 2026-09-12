@@ -28,6 +28,7 @@ export default function App() {
     <Route path="/synthesize" element={<SynthesizePage />} />
     <Route path="/pages" element={<EvidencePagesPage />} />
     <Route path="/live/:slug" element={<LiveViewPage />} />
+    <Route path="/live/:slug/edit" element={<SynthesizePage />} />
     <Route path="/reviews" element={<Navigate to="/pages" replace />} />
     <Route path="/review/:slug" element={<ReviewPage />} />
     <Route path="/review/:slug/edit" element={<ReviewEditorPage />} />

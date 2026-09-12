@@ -57,13 +57,14 @@ export default function ExplorePage() {
       <div className="hero-actions"><Link className="button primary" to="/contribute">Contribute evidence</Link><Link className="button secondary" to="/synthesize">Build a comparison</Link></div>
     </section>
 
-    <section className="metric-grid six">
+    <section className="metric-grid">
       <MetricCard label="Papers" value={compactNumber(metrics.papers)} />
       <MetricCard label="Extracted endpoints" value={compactNumber(metrics.endpoints)} />
       <MetricCard label="Study groups" value={compactNumber(metrics.study_groups)} />
       <MetricCard label="Appraisals" value={compactNumber(metrics.appraisals)} />
       <MetricCard label="Contributors" value={compactNumber(metrics.contributors)} />
-      <MetricCard label="Published snapshots" value={compactNumber(metrics.published_reviews)} />
+      <MetricCard label="Living evidence pages" value={compactNumber(metrics.living_pages)} />
+      <MetricCard label="Published snapshots" value={compactNumber(metrics.published_snapshots ?? metrics.published_reviews)} />
     </section>
 
     <div className="two-column">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import ForestPlot from '../components/ForestPlot';
@@ -13,6 +13,7 @@ import {
   runSynthesis,
 } from '../lib/synthesis';
 import { slugify } from '../lib/identifiers';
+import { STUDY_DESIGN_OPTIONS, WORK_TYPE_OPTIONS, studyDesignLabel, workTypeLabel } from '../lib/studyDesigns';
 
 function cohortTypeArray(value) {
   return value ? [value] : null;
@@ -32,7 +33,7 @@ function groupTypeLabel(value) {
   return 'Study group';
 }
 
-function StudyEvidenceTable({ studies = [], outcomeType, proportionAsPercent, label = 'Included studies' }) {
+function StudyEvidenceTable({ studies = [], outcomeType, proportionAsPercent, label = 'Included studies', onExclude }) {
   const [page, setPage] = useState(0);
   const pageSize = 50;
   useEffect(() => { setPage(0); }, [studies]);
@@ -48,7 +49,7 @@ function StudyEvidenceTable({ studies = [], outcomeType, proportionAsPercent, la
       <div className="muted tiny">{studies.length.toLocaleString()} studies</div>
     </div>
     <div className="table-wrap"><table>
-      <thead><tr><th>Study</th><th>Cohorts merged</th><th>Matched endpoint records</th><th>Appraisal</th><th>Study estimate (95% CI)</th><th>Pool weight</th></tr></thead>
+      <thead><tr><th>Study</th><th>Cohorts merged</th><th>Matched endpoint records</th><th>Appraisal</th><th>Study estimate (95% CI)</th><th>Pool weight</th>{onExclude && <th>Include</th>}</tr></thead>
       <tbody>{visible.map(study => <tr key={study.workId}>
         <td>
           <Link to={`/work/${study.workId}`}><strong>{study.label}</strong></Link>
@@ -60,6 +61,7 @@ function StudyEvidenceTable({ studies = [], outcomeType, proportionAsPercent, la
         <td>{Number.isFinite(study.qualityScore) ? `${study.qualityScore.toFixed(2)} / 5` : 'Not appraised'}{study.appraisalCount ? <div className="muted tiny">n={study.appraisalCount} appraisal{study.appraisalCount === 1 ? '' : 's'}</div> : null}</td>
         <td>{format(study.y)} ({format(study.ciLower)} to {format(study.ciUpper)}){study.denominatorLabel ? <div className="muted tiny">{study.denominatorLabel}</div> : null}</td>
         <td>{Number.isFinite(study.poolWeightPct) ? `${study.poolWeightPct.toFixed(1)}%` : '—'}</td>
+        {onExclude && <td><button type="button" className="button mini ghost" onClick={() => onExclude(study)}>Exclude article</button></td>}
       </tr>)}</tbody>
     </table></div>
     {pages > 1 && <div className="row-actions" style={{ marginTop: 12 }}>
@@ -70,7 +72,7 @@ function StudyEvidenceTable({ studies = [], outcomeType, proportionAsPercent, la
   </div>;
 }
 
-function ResultBlock({ title, rows, model, frameworkName, suffix, rateScale, percent, plotId }) {
+function ResultBlock({ title, rows, model, frameworkName, suffix, rateScale, percent, plotId, onExclude }) {
   const outcomeType = rows[0]?.outcome_type || model.studies?.[0]?.outcomeType;
   return <section className="section-block">
     <div className="section-heading"><div><div className="eyebrow">Evidence set</div><h2>{title}</h2></div></div>
@@ -82,12 +84,14 @@ function ResultBlock({ title, rows, model, frameworkName, suffix, rateScale, per
       <div className="metric-card"><div className="metric-value">{Number.isFinite(model.tau2) ? model.tau2.toFixed(4) : '—'}</div><div className="metric-label">Tau²</div></div>
     </div>
     <div className="card"><ForestPlot studies={model.studies} pooled={model} title={`${title} forest plot`} plotId={plotId} rateScale={rateScale} proportionAsPercent={percent} /></div>
-    <div className="card"><StudyEvidenceTable studies={model.studies} outcomeType={outcomeType} proportionAsPercent={percent} label={`Included studies${frameworkName ? ` • ${frameworkName}` : ''}`} /></div>
+    <div className="card"><StudyEvidenceTable studies={model.studies} outcomeType={outcomeType} proportionAsPercent={percent} label={`Included studies${frameworkName ? ` • ${frameworkName}` : ''}`} onExclude={onExclude} /></div>
   </section>;
 }
 
 export default function SynthesizePage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const { slug: editSlug } = useParams();
   const [rowsA, setRowsA] = useState([]);
   const [rowsB, setRowsB] = useState([]);
   const [concepts, setConcepts] = useState([]);
@@ -99,6 +103,12 @@ export default function SynthesizePage() {
   const [facetsB, setFacetsB] = useState([]);
   const [groupTypeA, setGroupTypeA] = useState('');
   const [groupTypeB, setGroupTypeB] = useState('');
+  const [mixedModeA, setMixedModeA] = useState('all');
+  const [mixedModeB, setMixedModeB] = useState('all');
+  const [workTypes, setWorkTypes] = useState([]);
+  const [studyDesigns, setStudyDesigns] = useState([]);
+  const [excludedWorksA, setExcludedWorksA] = useState([]);
+  const [excludedWorksB, setExcludedWorksB] = useState([]);
   const [yearMin, setYearMin] = useState('');
   const [yearMax, setYearMax] = useState('');
   const [weighting, setWeighting] = useState('raw');
@@ -109,19 +119,65 @@ export default function SynthesizePage() {
   const [includePrivate, setIncludePrivate] = useState(false);
   const [requireAppraisal, setRequireAppraisal] = useState(true);
   const [compareMode, setCompareMode] = useState(false);
-  const [labelA, setLabelA] = useState('Evidence set A');
-  const [labelB, setLabelB] = useState('Evidence set B');
+  const [labelA, setLabelA] = useState('Primary evidence');
+  const [labelB, setLabelB] = useState('Comparator evidence');
   const [outcomeDirection, setOutcomeDirection] = useState('');
   const [excludeOverlap, setExcludeOverlap] = useState(true);
   const [overlapCount, setOverlapCount] = useState(0);
   const [hasRun, setHasRun] = useState(false);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+  const [editingView, setEditingView] = useState(null);
+  const [pageTitle, setPageTitle] = useState('');
+  const [pageDescription, setPageDescription] = useState('');
 
   useEffect(() => { loadOptions(); }, [user?.id]);
+  useEffect(() => { if (editSlug && user) loadExistingView(); }, [editSlug, user?.id]);
 
   function invalidate() {
     if (hasRun) setHasRun(false);
+  }
+
+  function toggleArrayValue(setter, value) {
+    setter(current => current.includes(value) ? current.filter(x => x !== value) : [...current, value]);
+    invalidate();
+  }
+
+  async function loadExistingView() {
+    const { data, error } = await supabase.from('rse_live_views').select('*').eq('slug', editSlug).maybeSingle();
+    if (error || !data) { setMsg(error?.message || 'Living evidence page not found.'); return; }
+    if (data.owner_user_id !== user.id) { setMsg('Only the owner can edit this living evidence page.'); return; }
+    const f = data.filters || {};
+    setEditingView(data);
+    setPageTitle(data.title || '');
+    setPageDescription(data.description || '');
+    setOutcome(data.outcome_concept_id || '');
+    setFrameworkId(data.appraisal_framework_id || '');
+    setFacetsA(Array.isArray(f.facets_a) ? f.facets_a.map(x => ({ ...x, canonical_label: x.canonical_label || x.label })) : []);
+    setFacetsB(Array.isArray(f.facets_b) ? f.facets_b.map(x => ({ ...x, canonical_label: x.canonical_label || x.label })) : []);
+    setGroupTypeA(f.cohort_type_a || '');
+    setGroupTypeB(f.cohort_type_b || '');
+    setMixedModeA(f.mixed_mode_a || 'all');
+    setMixedModeB(f.mixed_mode_b || 'all');
+    setWorkTypes(Array.isArray(f.work_types) ? f.work_types : []);
+    setStudyDesigns(Array.isArray(f.study_designs) ? f.study_designs : []);
+    setExcludedWorksA(Array.isArray(f.excluded_works_a) ? f.excluded_works_a : (f.excluded_work_ids_a || []).map(id => ({ id, label: id })));
+    setExcludedWorksB(Array.isArray(f.excluded_works_b) ? f.excluded_works_b : (f.excluded_work_ids_b || []).map(id => ({ id, label: id })));
+    setYearMin(f.year_min ?? '');
+    setYearMax(f.year_max ?? '');
+    setWeighting(data.weighting || 'raw');
+    setRateScale(data.rate_scale || 'per_1000_days');
+    setPercent(data.proportion_as_percent !== false);
+    setScope(data.visibility === 'organization' ? 'organization' : 'public');
+    setOrgId(data.owner_org_id || '');
+    setIncludePrivate(Boolean(data.include_private || data.visibility === 'private'));
+    setRequireAppraisal(data.require_appraisal !== false);
+    setCompareMode(Boolean(f.compare_mode));
+    setLabelA(f.label_a || 'Primary evidence');
+    setLabelB(f.label_b || 'Comparator evidence');
+    setOutcomeDirection(f.outcome_direction || '');
+    setExcludeOverlap(f.exclude_overlap_from_b !== false);
+    setHasRun(false);
   }
 
   async function loadOptions() {
@@ -134,7 +190,7 @@ export default function SynthesizePage() {
     setFrameworks(f.data || []);
     setOrgs((o.data || []).map(x => x.org).filter(Boolean));
     const preferred = (f.data || []).find(x => x.slug === 'rse-custom') || f.data?.[0];
-    if (!frameworkId && preferred) setFrameworkId(preferred.id);
+    if (!editSlug && !frameworkId && preferred) setFrameworkId(preferred.id);
   }
 
   function commonRpcArgs() {
@@ -145,6 +201,8 @@ export default function SynthesizePage() {
       p_include_private: Boolean(includePrivate && user),
       p_year_min: yearMin ? Number(yearMin) : null,
       p_year_max: yearMax ? Number(yearMax) : null,
+      p_work_types: workTypes.length ? workTypes : null,
+      p_study_designs: studyDesigns.length ? studyDesigns : null,
     };
   }
 
@@ -157,13 +215,17 @@ export default function SynthesizePage() {
 
     try {
       if (compareMode) {
-        const { data, error } = await supabase.rpc('rse_get_synthesis_comparison_rows_v1', {
+        const { data, error } = await supabase.rpc('rse_get_synthesis_comparison_rows_v2', {
           ...commonRpcArgs(),
           p_facet_filters_a: facetFilterObject(facetsA),
           p_cohort_types_a: cohortTypeArray(groupTypeA),
           p_facet_filters_b: facetFilterObject(facetsB),
           p_cohort_types_b: cohortTypeArray(groupTypeB),
           p_exclude_overlap: Boolean(excludeOverlap),
+          p_mixed_mode_a: mixedModeA,
+          p_mixed_mode_b: mixedModeB,
+          p_excluded_work_ids_a: excludedWorksA.length ? excludedWorksA.map(x => x.id) : null,
+          p_excluded_work_ids_b: excludedWorksB.length ? excludedWorksB.map(x => x.id) : null,
         });
         if (error) throw error;
         const all = data || [];
@@ -171,10 +233,12 @@ export default function SynthesizePage() {
         setRowsB(all.filter(row => row.set_code === 'B'));
         setOverlapCount(Number(all[0]?.overlap_count) || 0);
       } else {
-        const { data, error } = await supabase.rpc('rse_get_synthesis_rows_v3', {
+        const { data, error } = await supabase.rpc('rse_get_synthesis_rows_v4', {
           ...commonRpcArgs(),
           p_facet_filters: facetFilterObject(facetsA),
           p_cohort_types: cohortTypeArray(groupTypeA),
+          p_mixed_mode: mixedModeA,
+          p_excluded_work_ids: excludedWorksA.length ? excludedWorksA.map(x => x.id) : null,
         });
         if (error) throw error;
         setRowsA(data || []);
@@ -205,52 +269,90 @@ export default function SynthesizePage() {
   const suffix = type === 'proportion' && percent ? '%' : type === 'rate' ? ` (${RATE_SCALE_OPTIONS.find(x => x[0] === rateScale)?.[1]})` : '';
   const selectedFramework = frameworks.find(x => x.id === frameworkId);
   const searchOrgId = scope === 'organization' ? orgId || null : null;
+  const displayLabelA = labelA.trim() || 'Primary evidence';
+  const displayLabelB = labelB.trim() || 'Comparator evidence';
+
+  function excludeStudy(setCode, study) {
+    const reason = window.prompt(`Reason for excluding ${study.label} from ${setCode === 'B' ? displayLabelB : displayLabelA} (optional)`, '');
+    if (reason === null) return;
+    const item = { id: study.workId, label: study.label, title: study.title, reason: reason.trim() || null };
+    if (setCode === 'B') setExcludedWorksB(current => current.some(x => x.id === item.id) ? current : [...current, item]);
+    else setExcludedWorksA(current => current.some(x => x.id === item.id) ? current : [...current, item]);
+    setHasRun(false);
+    setMsg(`${study.label} excluded from ${setCode === 'B' ? displayLabelB : displayLabelA}${item.reason ? `: ${item.reason}` : ''}. Run synthesis again to apply the article exclusion.`);
+  }
+
+  function restoreExcluded(setCode, id) {
+    if (setCode === 'B') setExcludedWorksB(current => current.filter(x => x.id !== id));
+    else setExcludedWorksA(current => current.filter(x => x.id !== id));
+    invalidate();
+  }
 
   async function saveLive() {
-    if (!user) { setMsg('Sign in to save a live comparison.'); return; }
-    if (!hasRun) { setMsg('Run the synthesis before saving a live evidence page.'); return; }
-    const title = window.prompt('Title for this live evidence page', concepts.find(x => x.id === outcome)?.label || 'Live evidence');
+    if (!user) { setMsg('Sign in to save a living evidence page.'); return; }
+    if (!editingView && !hasRun) { setMsg('Run the synthesis before saving a living evidence page.'); return; }
+
+    const title = editingView
+      ? pageTitle.trim()
+      : window.prompt('Title for this living evidence page', concepts.find(x => x.id === outcome)?.label || 'Living evidence');
     if (!title) return;
+    const description = editingView
+      ? pageDescription.trim()
+      : (window.prompt('Short description', compareMode ? `Living RSE zoned comparison of ${displayLabelA} and ${displayLabelB}.` : 'Living synthesis from current consensus evidence in Ready...Set...Evidence.') || '');
+
     const liveVisibility = scope === 'organization' ? 'organization' : includePrivate ? 'private' : 'public';
     const liveOrgId = liveVisibility === 'organization' ? orgId : null;
+    const filters = {
+      version: 4,
+      facet_filters_a: facetFilterObject(facetsA),
+      facets_a: facetsA.map(x => ({ id: x.id, label: x.canonical_label || x.label, concept_type: x.concept_type })),
+      cohort_type_a: groupTypeA || null,
+      mixed_mode_a: mixedModeA,
+      compare_mode: Boolean(compareMode),
+      label_a: displayLabelA,
+      facet_filters_b: compareMode ? facetFilterObject(facetsB) : {},
+      facets_b: compareMode ? facetsB.map(x => ({ id: x.id, label: x.canonical_label || x.label, concept_type: x.concept_type })) : [],
+      cohort_type_b: compareMode ? groupTypeB || null : null,
+      mixed_mode_b: compareMode ? mixedModeB : 'all',
+      label_b: compareMode ? displayLabelB : null,
+      outcome_direction: compareMode ? outcomeDirection || null : null,
+      exclude_overlap_from_b: compareMode ? Boolean(excludeOverlap) : false,
+      work_types: workTypes,
+      study_designs: studyDesigns,
+      excluded_work_ids_a: excludedWorksA.map(x => x.id),
+      excluded_works_a: excludedWorksA,
+      excluded_work_ids_b: compareMode ? excludedWorksB.map(x => x.id) : [],
+      excluded_works_b: compareMode ? excludedWorksB : [],
+      year_min: yearMin ? Number(yearMin) : null,
+      year_max: yearMax ? Number(yearMax) : null,
+    };
     const payload = {
-      slug: `${slugify(title)}-${Math.random().toString(36).slice(2, 7)}`,
-      title,
-      description: compareMode ? 'Live RSE zoned comparison of two structured evidence sets.' : 'Live synthesis from current consensus evidence in Ready...Set...Evidence.',
-      outcome_concept_id: outcome,
-      filters: {
-        version: 3,
-        facet_filters_a: facetFilterObject(facetsA),
-        facets_a: facetsA.map(x => ({ id: x.id, label: x.canonical_label || x.label, concept_type: x.concept_type })),
-        cohort_type_a: groupTypeA || null,
-        compare_mode: Boolean(compareMode),
-        label_a: labelA,
-        facet_filters_b: compareMode ? facetFilterObject(facetsB) : {},
-        facets_b: compareMode ? facetsB.map(x => ({ id: x.id, label: x.canonical_label || x.label, concept_type: x.concept_type })) : [],
-        cohort_type_b: compareMode ? groupTypeB || null : null,
-        label_b: compareMode ? labelB : null,
-        outcome_direction: compareMode ? outcomeDirection || null : null,
-        exclude_overlap_from_b: compareMode ? Boolean(excludeOverlap) : false,
-        year_min: yearMin ? Number(yearMin) : null,
-        year_max: yearMax ? Number(yearMax) : null,
-      },
-      weighting,
-      rate_scale: rateScale,
-      proportion_as_percent: percent,
-      owner_user_id: user.id,
-      owner_org_id: liveOrgId,
-      visibility: liveVisibility,
-      is_public: liveVisibility === 'public',
-      appraisal_framework_id: frameworkId || null,
-      require_appraisal: Boolean(requireAppraisal),
+      title, description: description || null, outcome_concept_id: outcome, filters, weighting,
+      rate_scale: rateScale, proportion_as_percent: percent, owner_org_id: liveOrgId,
+      visibility: liveVisibility, is_public: liveVisibility === 'public',
+      appraisal_framework_id: frameworkId || null, require_appraisal: Boolean(requireAppraisal),
       include_private: Boolean(liveVisibility === 'private' && includePrivate),
     };
-    const { data, error } = await supabase.from('rse_live_views').insert(payload).select().single();
-    setMsg(error ? error.message : `Live view created: /live/${data.slug}`);
+
+    if (editingView) {
+      const { error } = await supabase.from('rse_live_views').update(payload).eq('id', editingView.id).eq('owner_user_id', user.id);
+      if (error) setMsg(error.message);
+      else navigate(`/live/${editingView.slug}`);
+      return;
+    }
+
+    const { data, error } = await supabase.from('rse_live_views').insert({
+      ...payload,
+      slug: `${slugify(title)}-${Math.random().toString(36).slice(2, 7)}`,
+      owner_user_id: user.id,
+    }).select().single();
+    setMsg(error ? error.message : `Living evidence page created: /live/${data.slug}`);
   }
 
   return <section>
-    <div className="page-title"><div><div className="eyebrow">Reusable synthesis</div><h1>Build a comparison from structured evidence</h1><p>Select an outcome and filters, then explicitly run the synthesis. RSE does not load a broad endpoint table on initial page load.</p></div></div>
+    <div className="page-title"><div><div className="eyebrow">{editingView ? 'Evidence Page • Edit living page' : 'Reusable synthesis'}</div><h1>{editingView ? `Edit ${editingView.title}` : 'Build a comparison from structured evidence'}</h1><p>{editingView ? 'Update the living page configuration, rerun the synthesis to preview changes, then save.' : 'Select an outcome and filters, then explicitly run the synthesis. RSE does not load a broad endpoint table on initial page load.'}</p></div></div>
+
+    {editingView && <div className="card form-grid"><label className="span2">Page title<input value={pageTitle} onChange={e => setPageTitle(e.target.value)} /></label><label className="span2">Description<textarea rows="3" value={pageDescription} onChange={e => setPageDescription(e.target.value)} /></label></div>}
 
     <div className="card form-stack">
       <div className="filter-grid">
@@ -267,41 +369,47 @@ export default function SynthesizePage() {
         <label className="checkbox"><input type="checkbox" checked={percent} onChange={e => { setPercent(e.target.checked); invalidate(); }} /> Show proportions as percent</label>
         <label className="checkbox"><input type="checkbox" checked={compareMode} onChange={e => { setCompareMode(e.target.checked); invalidate(); }} /> Compare two evidence sets</label>
         {compareMode && <label>Outcome direction<select value={outcomeDirection} onChange={e => { setOutcomeDirection(e.target.value); invalidate(); }}><option value="">Select for zoning</option>{OUTCOME_DIRECTION_OPTIONS.map(([v, l]) => <option value={v} key={v}>{l}</option>)}</select></label>}
-        {compareMode && <label className="checkbox"><input type="checkbox" checked={excludeOverlap} onChange={e => { setExcludeOverlap(e.target.checked); invalidate(); }} /> Remove Set A endpoint overlap from Set B</label>}
+        {compareMode && <label className="checkbox"><input type="checkbox" checked={excludeOverlap} onChange={e => { setExcludeOverlap(e.target.checked); invalidate(); }} /> Remove {displayLabelA} endpoint overlap from {displayLabelB}</label>}
       </div>
+
+      <details className="subtle-callout"><summary><strong>Additional evidence filters</strong></summary><div className="two-column" style={{ marginTop: 12 }}><div><strong className="tiny">Publication / source type</strong><div className="tag-row">{WORK_TYPE_OPTIONS.map(([value, text]) => <label className="checkbox" key={value}><input type="checkbox" checked={workTypes.includes(value)} onChange={() => toggleArrayValue(setWorkTypes, value)} /> {text}</label>)}</div></div><div><strong className="tiny">Study design</strong><div className="tag-row">{STUDY_DESIGN_OPTIONS.map(([value, text]) => <label className="checkbox" key={value}><input type="checkbox" checked={studyDesigns.includes(value)} onChange={() => toggleArrayValue(setStudyDesigns, value)} /> {text}</label>)}</div></div></div><p className="muted tiny">Leave a category blank to include all values. Selecting only Randomized controlled trial provides an RCT-only synthesis.</p></details>
 
       <div className={compareMode ? 'two-column' : ''}>
         <div className="card" style={{ margin: 0 }}>
-          {compareMode && <label>Set A label<input value={labelA} onChange={e => { setLabelA(e.target.value); invalidate(); }} /></label>}
-          <label>Group type<select value={groupTypeA} onChange={e => { setGroupTypeA(e.target.value); invalidate(); }}><option value="">All group types</option><option value="overall">Overall cohorts only</option><option value="arm">Study arms only</option><option value="subgroup">Subgroups only</option></select></label>
-          <FacetPicker selected={facetsA} onAdd={concept => { setFacetsA(values => values.some(x => x.id === concept.id) ? values : [...values, concept]); invalidate(); }} onRemove={concept => { setFacetsA(values => values.filter(x => x.id !== concept.id)); invalidate(); }} searchOrgId={searchOrgId} includePrivate={includePrivate} label={compareMode ? 'Set A facets' : 'Cohort facets'} help="Within a facet category, selected concepts are OR alternatives. Across categories, categories are AND filters." />
+          {compareMode && <label>Primary evidence label<input value={labelA} onChange={e => { setLabelA(e.target.value); invalidate(); }} /></label>}
+          <div className="eyebrow">{compareMode ? displayLabelA : 'Selected evidence'}</div><label>Group type<select value={groupTypeA} onChange={e => { setGroupTypeA(e.target.value); invalidate(); }}><option value="">All group types</option><option value="overall">Overall cohorts only</option><option value="arm">Study arms only</option><option value="subgroup">Subgroups only</option></select></label>
+          <label>Mixed-cohort handling<select value={mixedModeA} onChange={e => { setMixedModeA(e.target.value); invalidate(); }}><option value="all">Include mixed and non-mixed cohorts</option><option value="exclude">Exclude mixed cohorts</option><option value="only">Mixed cohorts only</option></select></label>
+          <FacetPicker selected={facetsA} onAdd={concept => { setFacetsA(values => values.some(x => x.id === concept.id) ? values : [...values, concept]); invalidate(); }} onRemove={concept => { setFacetsA(values => values.filter(x => x.id !== concept.id)); invalidate(); }} searchOrgId={searchOrgId} includePrivate={includePrivate} label={compareMode ? `${displayLabelA} facets` : 'Cohort facets'} help="Within a facet category, selected concepts are OR alternatives. Across categories, categories are AND filters." />
         </div>
 
         {compareMode && <div className="card" style={{ margin: 0 }}>
-          <label>Set B label<input value={labelB} onChange={e => { setLabelB(e.target.value); invalidate(); }} /></label>
-          <label>Group type<select value={groupTypeB} onChange={e => { setGroupTypeB(e.target.value); invalidate(); }}><option value="">All group types</option><option value="overall">Overall cohorts only</option><option value="arm">Study arms only</option><option value="subgroup">Subgroups only</option></select></label>
-          <FacetPicker selected={facetsB} onAdd={concept => { setFacetsB(values => values.some(x => x.id === concept.id) ? values : [...values, concept]); invalidate(); }} onRemove={concept => { setFacetsB(values => values.filter(x => x.id !== concept.id)); invalidate(); }} searchOrgId={searchOrgId} includePrivate={includePrivate} label="Set B facets" help="Set B is filtered independently. With overlap removal enabled, any consensus endpoint that also matches Set A is removed from Set B." />
+          <label>Comparator evidence label<input value={labelB} onChange={e => { setLabelB(e.target.value); invalidate(); }} /></label>
+          <div className="eyebrow">{displayLabelB}</div><label>Group type<select value={groupTypeB} onChange={e => { setGroupTypeB(e.target.value); invalidate(); }}><option value="">All group types</option><option value="overall">Overall cohorts only</option><option value="arm">Study arms only</option><option value="subgroup">Subgroups only</option></select></label>
+          <label>Mixed-cohort handling<select value={mixedModeB} onChange={e => { setMixedModeB(e.target.value); invalidate(); }}><option value="all">Include mixed and non-mixed cohorts</option><option value="exclude">Exclude mixed cohorts</option><option value="only">Mixed cohorts only</option></select></label>
+          <FacetPicker selected={facetsB} onAdd={concept => { setFacetsB(values => values.some(x => x.id === concept.id) ? values : [...values, concept]); invalidate(); }} onRemove={concept => { setFacetsB(values => values.filter(x => x.id !== concept.id)); invalidate(); }} searchOrgId={searchOrgId} includePrivate={includePrivate} label={`${displayLabelB} facets`} help={`${displayLabelB} is filtered independently. With overlap removal enabled, any consensus endpoint that also matches ${displayLabelA} is removed from ${displayLabelB}.`} />
         </div>}
       </div>
 
-      <div className="row-actions"><button className="button primary" onClick={loadRows} disabled={loading}>{loading ? 'Running…' : 'Run synthesis'}</button><button className="button secondary" onClick={saveLive}>Save as live evidence page</button></div>
+      {(excludedWorksA.length > 0 || (compareMode && excludedWorksB.length > 0)) && <div className="subtle-callout"><strong>Article exclusions</strong>{excludedWorksA.length > 0 && <div className="tag-row"><span className="muted tiny">{displayLabelA}:</span>{excludedWorksA.map(x => <button type="button" className="button mini ghost" key={x.id} onClick={() => restoreExcluded('A', x.id)}>{x.label || x.title || x.id}{x.reason ? ` — ${x.reason}` : ''} ×</button>)}</div>}{compareMode && excludedWorksB.length > 0 && <div className="tag-row"><span className="muted tiny">{displayLabelB}:</span>{excludedWorksB.map(x => <button type="button" className="button mini ghost" key={x.id} onClick={() => restoreExcluded('B', x.id)}>{x.label || x.title || x.id}{x.reason ? ` — ${x.reason}` : ''} ×</button>)}</div>}<div className="muted tiny">Click an excluded article to restore it. Article exclusions are saved with living Evidence Pages.</div></div>}
+
+      <div className="row-actions"><button className="button primary" onClick={loadRows} disabled={loading}>{loading ? 'Running…' : 'Run synthesis'}</button><button className="button secondary" onClick={saveLive}>{editingView ? 'Save living page changes' : 'Save as living evidence page'}</button>{editingView && <button type="button" className="button ghost" onClick={() => navigate(`/live/${editingView.slug}`)}>Cancel</button>}</div>
     </div>
 
     {selectedFramework && <div className="subtle-callout"><strong>{selectedFramework.name}</strong> is the active appraisal framework. Each contributor's appraisal is the arithmetic mean of its domain scores. RAW uses the study-level community mean for that selected framework.</div>}
-    {compareMode && <div className="subtle-callout"><strong>Endpoint-specific comparison sets.</strong> Set A and Set B are independently filtered. When overlap removal is enabled, an endpoint matching both sets remains in Set A and is excluded only from Set B. Other endpoints from the same paper remain eligible for Set B if they independently meet its filters.</div>}
+    {compareMode && <div className="subtle-callout"><strong>Endpoint-specific comparison sets.</strong> {displayLabelA} and {displayLabelB} are independently filtered. When overlap removal is enabled, an endpoint matching both sets remains in {displayLabelA} and is excluded only from {displayLabelB}. Other endpoints from the same paper remain eligible for {displayLabelB} if they independently meet its filters.</div>}
     {msg && <div className="notice">{msg}</div>}
 
     {!hasRun && <div className="empty-state" style={{ marginTop: 24 }}><strong>No synthesis has been run yet.</strong><br />Choose an outcome and any desired evidence filters, then click Run synthesis.</div>}
 
     {hasRun && compareMode && <>
-      {excludeOverlap && overlapCount > 0 && <div className="notice">{overlapCount.toLocaleString()} consensus endpoint{overlapCount === 1 ? '' : 's'} matched both evidence sets and {overlapCount === 1 ? 'was' : 'were'} removed from Set B.</div>}
-      <div className="card section-block"><ZonedComparisonPlot modelA={modelA} modelB={modelB} labelA={labelA} labelB={labelB} direction={outcomeDirection} rateScale={rateScale} proportionAsPercent={percent} /></div>
+      {excludeOverlap && overlapCount > 0 && <div className="notice">{overlapCount.toLocaleString()} consensus endpoint{overlapCount === 1 ? '' : 's'} matched both evidence sets and {overlapCount === 1 ? 'was' : 'were'} removed from {displayLabelB}.</div>}
+      <div className="card section-block"><ZonedComparisonPlot modelA={modelA} modelB={modelB} labelA={displayLabelA} labelB={displayLabelB} direction={outcomeDirection} rateScale={rateScale} proportionAsPercent={percent} /></div>
       <div className="section-heading"><div><div className="eyebrow">Supporting plots</div><h2>Individual evidence-set forest plots</h2><p>The zoned comparison is the primary RSE comparison view. The separate forest plots remain available to inspect each pooled evidence set independently.</p></div></div>
     </>}
 
-    {hasRun && <ResultBlock title={compareMode ? labelA : 'Selected evidence'} rows={filteredA} model={modelA} frameworkName={selectedFramework?.name} suffix={suffix} rateScale={rateScale} percent={percent} plotId="rse-forest-a" />}
-    {hasRun && compareMode && <ResultBlock title={labelB} rows={filteredB} model={modelB} frameworkName={selectedFramework?.name} suffix={suffix} rateScale={rateScale} percent={percent} plotId="rse-forest-b" />}
+    {hasRun && <ResultBlock title={compareMode ? displayLabelA : 'Selected evidence'} rows={filteredA} model={modelA} frameworkName={selectedFramework?.name} suffix={suffix} rateScale={rateScale} percent={percent} plotId="rse-forest-a" onExclude={study => excludeStudy('A', study)} />}
+    {hasRun && compareMode && <ResultBlock title={displayLabelB} rows={filteredB} model={modelB} frameworkName={selectedFramework?.name} suffix={suffix} rateScale={rateScale} percent={percent} plotId="rse-forest-b" onExclude={study => excludeStudy('B', study)} />}
 
-    {hasRun && <div className="subtle-callout"><strong>Filter summary:</strong> {facetsA.length ? `Set A: ${facetSummary(facetsA)}.` : 'Set A has no facet restrictions.'}{compareMode ? ` ${facetsB.length ? `Set B: ${facetSummary(facetsB)}.` : 'Set B has no facet restrictions.'}` : ''} {groupTypeA ? `Set A group type: ${groupTypeLabel(groupTypeA)}.` : ''}</div>}
+    {hasRun && <div className="subtle-callout"><strong>Filter summary:</strong> {facetsA.length ? `${displayLabelA}: ${facetSummary(facetsA)}.` : `${displayLabelA} has no facet restrictions.`}{compareMode ? ` ${facetsB.length ? `${displayLabelB}: ${facetSummary(facetsB)}.` : `${displayLabelB} has no facet restrictions.`}` : ''} {groupTypeA ? `${displayLabelA} group type: ${groupTypeLabel(groupTypeA)}.` : ''} {mixedModeA === 'exclude' ? `${displayLabelA} excludes mixed cohorts.` : mixedModeA === 'only' ? `${displayLabelA} includes only mixed cohorts.` : ''} {workTypes.length ? `Source types: ${workTypes.map(workTypeLabel).join(', ')}.` : ''} {studyDesigns.length ? `Study designs: ${studyDesigns.map(studyDesignLabel).join(', ')}.` : ''}</div>}
   </section>;
 }

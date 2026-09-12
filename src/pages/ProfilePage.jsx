@@ -164,12 +164,13 @@ export default function ProfilePage() {
     {isSelf && <div className="card orcid-card"><div><h3>ORCID identity</h3><p className="muted">{p.orcid_verified_at ? <>Verified ORCID: <strong>{p.orcid}</strong></> : p.orcid ? `ORCID ${p.orcid} is stored but not OAuth verified.` : 'Connect ORCID to verify your researcher identity and enable automatic authorship matches when trusted article metadata includes your ORCID.'}</p></div>{!p.orcid_verified_at && <button className="button secondary" onClick={verifyOrcid}>Connect ORCID</button>}</div>}
     {msg && <div className="notice">{msg}</div>}
 
-    <div className="metric-grid six">
+    <div className="metric-grid">
       <MetricCard label="Contribution points" value={compactNumber(metrics?.points)} detail="Activity-based" />
       <MetricCard label="Endpoints extracted" value={metrics?.endpoints_extracted} />
       <MetricCard label="Appraisals" value={metrics?.appraisals_completed} />
       <MetricCard label="Changes implemented" value={metrics?.changes_implemented} />
       <MetricCard label="Followers" value={metrics?.followers} />
+      <MetricCard label="Living evidence pages" value={metrics?.living_pages} />
       <MetricCard label="Published snapshots" value={metrics?.reviews_published} />
     </div>
 
